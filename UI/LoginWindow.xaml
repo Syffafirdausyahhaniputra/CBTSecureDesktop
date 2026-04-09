@@ -1,0 +1,281 @@
+<Window x:Class="CBTSecureDesktop.UI.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="CBT Polinema - Login"
+        Height="700"
+        Width="1000"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent">
+
+    <Border CornerRadius="20" Background="{StaticResource PolinemaWhite}">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" Direction="270" ShadowDepth="0" Opacity="0.3" BlurRadius="30"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*"/>
+                <ColumnDefinition Width="3*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left Panel - Polinema Branding -->
+            <Border Grid.Column="0" 
+                   Background="{StaticResource PolinemaHeaderGradient}"
+                   CornerRadius="20,0,0,20">
+                <Grid>
+                    <StackPanel VerticalAlignment="Center" 
+                               HorizontalAlignment="Center"
+                               Margin="40">
+                        
+                        <!-- Logo Polinema -->
+                        <Border Width="120" Height="120"
+                               Background="{StaticResource PolinemaWhite}"
+                               CornerRadius="60"
+                               Margin="0,0,0,30">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#000000" Direction="270" ShadowDepth="0" Opacity="0.2" BlurRadius="15"/>
+                            </Border.Effect>
+                            <!-- Placeholder for Logo -->
+                            <Image Source="pack://application:,,,/Assets/Images/polinema-logo.png" Stretch="Uniform" Margin="15"/>
+                            </Border>
+
+                        <!-- Title -->
+                        <TextBlock Text="SISTEM CBT"
+                                  FontSize="32"
+                                  FontWeight="Bold"
+                                  Foreground="{StaticResource PolinemaWhite}"
+                                  HorizontalAlignment="Center"
+                                  Margin="0,0,0,10"/>
+                        
+                        <Rectangle Height="4" 
+                                  Width="80"
+                                  Fill="{StaticResource PolinemaYellow}"
+                                  RadiusX="2" RadiusY="2"
+                                  Margin="0,0,0,20"/>
+
+                        <TextBlock Text="POLITEKNIK NEGERI MALANG"
+                                  FontSize="16"
+                                  FontWeight="SemiBold"
+                                  Foreground="{StaticResource PolinemaYellow}"
+                                  HorizontalAlignment="Center"
+                                  TextAlignment="Center"
+                                  Margin="0,0,0,40"/>
+
+                        <!-- Info Box -->
+                        <Border Background="#FFFFFF20"
+                               CornerRadius="10"
+                               Padding="20"
+                               Margin="0,20,0,0">
+                            <StackPanel>
+                                <TextBlock Text="🔒 Sistem Ujian Aman"
+                                          FontSize="14"
+                                          Foreground="{StaticResource PolinemaBluePrimary}"
+                                          Margin="0,0,0,10"/>
+                                <TextBlock Text="📝 Ujian Berbasis Komputer"
+                                          FontSize="14"
+                                          Foreground="{StaticResource PolinemaBluePrimary}"
+                                          Margin="0,0,0,10"/>
+                                <TextBlock Text="✨ Terintegrasi Database"
+                                          FontSize="14"
+                                          Foreground="{StaticResource PolinemaBluePrimary}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Close Button -->
+                    <Button Content="✕"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Top"
+                           Width="40"
+                           Height="40"
+                           Margin="10"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           Foreground="{StaticResource PolinemaWhite}"
+                           Background="Transparent"
+                           BorderThickness="0"
+                           Cursor="Hand"
+                           Click="CloseButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}"
+                                                   CornerRadius="20">
+                                                <ContentPresenter HorizontalAlignment="Center" 
+                                                                VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#FFFFFF30"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Right Panel - Login Form -->
+            <Grid Grid.Column="1" Margin="60">
+                <StackPanel VerticalAlignment="Center">
+                    
+                    <!-- Header -->
+                    <TextBlock Text="Selamat Datang!"
+                              FontSize="32"
+                              FontWeight="Bold"
+                              Foreground="{StaticResource PolinemaBluePrimary}"
+                              Margin="0,0,0,10"/>
+                    
+                    <TextBlock Text="Masuk ke akun Anda untuk melanjutkan"
+                              FontSize="14"
+                              Foreground="{StaticResource PolinemaTextGray}"
+                              Margin="0,0,0,40"/>
+
+                    <!-- Username Field -->
+                    <TextBlock Text="Username (NIM/NIP)"
+                              FontSize="14"
+                              FontWeight="SemiBold"
+                              Foreground="{StaticResource PolinemaDarkGray}"
+                              Margin="0,0,0,8"/>
+                    
+                    <Border Background="{StaticResource PolinemaLightGray}"
+                           BorderBrush="{StaticResource PolinemaBorderGray}"
+                           BorderThickness="2"
+                           CornerRadius="8"
+                           Margin="0,0,0,20">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <TextBlock Text="👤" 
+                                      FontSize="20"
+                                      VerticalAlignment="Center"
+                                      Margin="15,0,10,0"
+                                      Foreground="{StaticResource PolinemaTextGray}"/>
+                            
+                            <TextBox x:Name="StudentIdTextBox"
+                                    Grid.Column="1"
+                                    FontSize="14"
+                                    Padding="5,12"
+                                    BorderThickness="0"
+                                    Background="Transparent"
+                                    VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Password Field -->
+                    <TextBlock Text="Password"
+                              FontSize="14"
+                              FontWeight="SemiBold"
+                              Foreground="{StaticResource PolinemaDarkGray}"
+                              Margin="0,0,0,8"/>
+                    
+                    <Border Background="{StaticResource PolinemaLightGray}"
+                           BorderBrush="{StaticResource PolinemaBorderGray}"
+                           BorderThickness="2"
+                           CornerRadius="8"
+                           Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <TextBlock Text="🔒" 
+                                      FontSize="20"
+                                      VerticalAlignment="Center"
+                                      Margin="15,0,10,0"
+                                      Foreground="{StaticResource PolinemaTextGray}"/>
+                            
+                            <PasswordBox x:Name="PasswordBox"
+                                        Grid.Column="1"
+                                        FontSize="14"
+                                        Padding="5,12"
+                                        BorderThickness="0"
+                                        Background="Transparent"
+                                        VerticalAlignment="Center"
+                                        KeyDown="PasswordBox_KeyDown"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Error Message -->
+                    <TextBlock x:Name="ErrorMessage"
+                              FontSize="12"
+                              Foreground="{StaticResource PolinemaRed}"
+                              Margin="0,5,0,15"
+                              TextWrapping="Wrap"
+                              Visibility="Collapsed"/>
+
+                    <!-- Loading Indicator -->
+                    <StackPanel x:Name="LoadingPanel" 
+                               Visibility="Collapsed"
+                               Margin="0,0,0,20">
+                        <ProgressBar IsIndeterminate="True" 
+                                    Height="4"
+                                    Foreground="{StaticResource PolinemaGreen}"
+                                    Background="{StaticResource PolinemaLightGray}"/>
+                        <TextBlock x:Name="LoadingText"
+                                  Text="Memverifikasi kredensial..."
+                                  FontSize="12"
+                                  Foreground="{StaticResource PolinemaTextGray}"
+                                  HorizontalAlignment="Center"
+                                  Margin="0,10,0,0"/>
+                    </StackPanel>
+
+                    <!-- Login Button -->
+                    <Button x:Name="LoginButton"
+                           Content="MASUK"
+                           Style="{StaticResource PolinemaButtonPrimary}"
+                           FontSize="16"
+                           Height="50"
+                           Click="LoginButton_Click"
+                           Margin="0,10,0,20"/>
+
+                    <!-- Security Warning -->
+                    <Border Background="#FFF3CD"
+                           BorderBrush="#FFE69C"
+                           BorderThickness="1"
+                           CornerRadius="8"
+                           Padding="15"
+                           Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="⚠️ PERHATIAN KEAMANAN"
+                                      FontSize="13"
+                                      FontWeight="Bold"
+                                      Foreground="#856404"
+                                      Margin="0,0,0,8"/>
+                            <TextBlock TextWrapping="Wrap"
+                                      FontSize="12"
+                                      Foreground="#856404"
+                                      LineHeight="18">
+                                <Run Text="• Mode ujian akan mengunci layar penuh"/>
+                                <LineBreak/>
+                                <Run Text="• Tidak dapat mengakses aplikasi lain"/>
+                                <LineBreak/>
+                                <Run Text="• Pastikan koneksi database stabil"/>
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Footer -->
+                    <TextBlock Text="© 2024 Politeknik Negeri Malang"
+                              FontSize="11"
+                              Foreground="{StaticResource PolinemaTextGray}"
+                              HorizontalAlignment="Center"
+                              Margin="0,30,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
