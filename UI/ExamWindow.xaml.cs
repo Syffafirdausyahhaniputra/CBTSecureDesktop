@@ -19,6 +19,7 @@ namespace CBTSecureDesktop.UI
         // Security components
         private readonly KioskManager _kioskManager;
         private readonly KeyboardHookService _keyboardHook;
+        private readonly ProcessMonitorService _processMonitor;
 
         // Timer
         private readonly DispatcherTimer _timer;
@@ -36,6 +37,7 @@ namespace CBTSecureDesktop.UI
             // Initialize security components
             _kioskManager = new KioskManager();
             _keyboardHook = new KeyboardHookService();
+            _processMonitor = new ProcessMonitorService();
 
             // Initialize timer
             _timer = new DispatcherTimer();
@@ -94,6 +96,16 @@ namespace CBTSecureDesktop.UI
                 // Start Keyboard Hook - block system shortcuts
                 _keyboardHook.StartHook();
 
+                // Start Process Monitor
+                _processMonitor.StartMonitoring(processName => 
+                {
+                    Dispatcher.Invoke(() => 
+                    {
+                        MessageBox.Show($"Peringatan Keamanan!\n\nAplikasi terlarang '{processName}' terdeteksi dan telah dihentikan oleh sistem.", 
+                            "Pelanggaran Keamanan", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    });
+                });
+
                 System.Diagnostics.Debug.WriteLine("✓ Security Mode Activated");
             }
             catch (Exception ex)
@@ -110,6 +122,9 @@ namespace CBTSecureDesktop.UI
         {
             try
             {
+                // Stop process monitor
+                _processMonitor.StopMonitoring();
+
                 // Stop keyboard hook
                 _keyboardHook.StopHook();
 
