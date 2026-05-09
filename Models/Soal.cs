@@ -7,7 +7,7 @@ namespace CBTSecureDesktop.Models
     {
         public long SoalId { get; set; }
         public long UjianId { get; set; }
-        public string KodeSoal { get; set; } = string.Empty;
+        public string KodeSoal { get; set; } = string.Empty; // Originally nomer_soal
         public string Pertanyaan { get; set; } = string.Empty;
         public DateTime? CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }

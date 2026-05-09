@@ -13,10 +13,16 @@ namespace CBTSecureDesktop.Models
         public string NamaUjian { get; set; } = string.Empty;
         public string Status { get; set; } = "menunggu"; // menunggu, dimulai, selesai
         public int ShuffleSoal { get; set; }
-        public TimeSpan StartTime { get; set; }
-        public TimeSpan EndTime { get; set; }
+        public DateTime StartTime { get; set; }
+        public DateTime EndTime { get; set; }
         public DateTime? CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
+
+        // Additional properties for displaying in dashboard
+        public int? Nilai { get; set; }
+        public string StatusMahasiswa { get; set; } = string.Empty; // Status of the student's exam session
+        public string ActionText => StatusMahasiswa == "selesai" ? "Review" : "Mulai"; // Text for the action button
+        public string NilaiText => StatusMahasiswa == "selesai" ? $"Nilai: {Nilai ?? 0}" : string.Empty;
 
         // Navigation properties
         public Matakuliah? Matakuliah { get; set; }

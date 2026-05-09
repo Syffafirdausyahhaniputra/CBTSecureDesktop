@@ -1,5 +1,6 @@
 using System.Windows;
 using CBTSecureDesktop.Services;
+using CBTSecureDesktop.Models;
 
 namespace CBTSecureDesktop.UI
 {
@@ -83,7 +84,25 @@ namespace CBTSecureDesktop.UI
         private void StartExamButton_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not System.Windows.Controls.Button button) return;
-            if (button.Tag is not long ujianId) return;
+
+            // Check if it's a start or review action based on the datacontext 
+            var ujian = button.DataContext as Ujian;
+            if (ujian == null) return;
+
+            long ujianId = ujian.UjianId;
+
+            if (ujian.StatusMahasiswa == "selesai")
+            {
+                // Here we would implement the review exam window
+                // For now, let's just show a temporary message
+                MessageBox.Show(
+                    $"Review mode untuk ujian '{ujian.NamaUjian}' akan segera tersedia.\n" +
+                    $"Nilai Anda: {ujian.Nilai ?? 0}",
+                    "Review Ujian",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
 
             // Confirm before starting exam
             var result = MessageBox.Show(

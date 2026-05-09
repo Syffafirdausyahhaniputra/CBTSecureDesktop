@@ -8,9 +8,9 @@ namespace CBTSecureDesktop.Models
         public long UjianMahasiswaId { get; set; }
         public long UjianId { get; set; }
         public long MahasiswaId { get; set; }
-        public TimeSpan? StartTime { get; set; }
-        public TimeSpan? EndTime { get; set; }
-        public TimeSpan? ExtendTime { get; set; }
+        public DateTime? StartTime { get; set; }
+        public DateTime? EndTime { get; set; }
+        public DateTime? ExtendTime { get; set; }
         public DateTime? TanggalUjian { get; set; }
         public string Status { get; set; } = "menunggu"; // menunggu, dimulai, selesai, dihentikan
         public string? Keterangan { get; set; }

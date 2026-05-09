@@ -78,7 +78,7 @@ namespace CBTSecureDesktop.Services
                         QuestionText = soal.Pertanyaan,
                         Options = soal.OpsiJawaban.Select(o => o.Jawaban).ToList(),
                         OptionIds = soal.OpsiJawaban.Select(o => o.OpsiJawabanId).ToList(),
-                        Images = soal.GambarSoal.Select(g => g.File).ToList()
+                        Images = soal.GambarSoal.Select(g => g.GambarSoalId.ToString()).ToList()
                     };
                     _currentExamQuestions.Add(examQuestion);
                 }
@@ -103,6 +103,7 @@ namespace CBTSecureDesktop.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Load exam questions error: {ex.Message}");
+                System.Windows.MessageBox.Show($"Service Error (LoadExamQuestionsAsync): {ex.Message}");
                 return new List<ExamQuestion>();
             }
         }

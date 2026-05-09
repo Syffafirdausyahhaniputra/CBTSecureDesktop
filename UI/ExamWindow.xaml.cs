@@ -25,6 +25,9 @@ namespace CBTSecureDesktop.UI
         private readonly DispatcherTimer _timer;
         private int _elapsedSeconds = 0;
 
+        // Image Service
+        private readonly ImageService _imageService = new ImageService();
+
         public ExamWindow(AuthService authService, ExamService examService, long ujianId, long mahasiswaId)
         {
             InitializeComponent();
@@ -52,16 +55,23 @@ namespace CBTSecureDesktop.UI
         {
             try
             {
+                // Disable window interaction during loading
+                this.IsEnabled = false;
+
                 // Load exam questions from database
                 _questions = await _examService.LoadExamQuestionsAsync(_ujianId, _mahasiswaId);
 
                 if (_questions.Count == 0)
                 {
+                    this.IsEnabled = true;
                     MessageBox.Show("No questions found for this exam.", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
                     this.Close();
                     return;
                 }
+
+                // Pre-download all images
+                await PreloadImagesAsync();
 
                 // ACTIVATE SECURITY MODE
                 ActivateSecurityMode();
@@ -74,9 +84,12 @@ namespace CBTSecureDesktop.UI
 
                 // Start timer
                 _timer.Start();
+
+                this.IsEnabled = true;
             }
             catch (Exception ex)
             {
+                this.IsEnabled = true;
                 MessageBox.Show($"Failed to load exam: {ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
                 this.Close();
@@ -139,7 +152,32 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private void DisplayQuestion(int index)
+        /// <summary>
+        /// Asynchronously pre-downloads all images needed for the exam before the first question is displayed.
+        /// </summary>
+        private async Task PreloadImagesAsync()
+        {
+            if (_questions == null || _questions.Count == 0) return;
+
+            foreach (var question in _questions)
+            {
+                if (question.Images != null && question.Images.Count > 0 && !string.IsNullOrEmpty(question.Images[0]))
+                {
+                    try
+                    {
+                        // Calling GetImageAsync here downloads it from the API and caches it.
+                        // Future calls in DisplayQuestion will read directly from the local cache.
+                        await _imageService.GetImageAsync(question.Images[0], "abc123");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to preload image ID {question.Images[0]}: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        private async void DisplayQuestion(int index)
         {
             if (index < 0 || index >= _questions.Count)
                 return;
@@ -151,6 +189,29 @@ namespace CBTSecureDesktop.UI
             QuestionNumberText.Text = $"Pertanyaan {question.QuestionNumber}";
             QuestionText.Text = question.QuestionText;
             QuestionCountText.Text = $"Soal {index + 1} dari {_questions.Count}";
+
+            // Manage image display (Image caching logic moved to PreDownloadImagesAsync)
+            if (question.Images != null && question.Images.Count > 0 && !string.IsNullOrEmpty(question.Images[0]))
+            {
+                try
+                {
+                    QuestionImage.Visibility = Visibility.Visible;
+                    
+                    // The image might be locally cached already via PreDownloadImagesAsync. 
+                    // To prevent UI blocking repeatedly, we still use GetImageAsync which loads from Cache.
+                    var bitmap = await _imageService.GetImageAsync(question.Images[0], "abc123");
+                    QuestionImage.Source = bitmap;
+                }
+                catch
+                {
+                    QuestionImage.Visibility = Visibility.Collapsed;
+                }
+            }
+            else
+            {
+                QuestionImage.Visibility = Visibility.Collapsed;
+                QuestionImage.Source = null;
+            }
 
             // Update progress
             int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue);

@@ -269,7 +269,7 @@
                     </Border>
 
                     <!-- Footer -->
-                    <TextBlock Text="© 2024 Politeknik Negeri Malang"
+                    <TextBlock Text="© 2026 Politeknik Negeri Malang"
                               FontSize="11"
                               Foreground="{StaticResource PolinemaTextGray}"
                               HorizontalAlignment="Center"
