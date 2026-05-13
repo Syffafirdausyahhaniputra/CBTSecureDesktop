@@ -65,6 +65,9 @@ namespace CBTSecureDesktop.Services
                 // Get questions from database
                 var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
 
+                // Prepare blank answers rows for this student to ensure they are recorded in database in the correct display sequence
+                await _databaseService.InitializeStudentAnswersAsync(ujianId, mahasiswaId, soalList.Select(s => s.SoalId).ToList());
+
                 // Convert to ExamQuestion view model
                 _currentExamQuestions = new List<ExamQuestion>();
                 int questionNumber = 1;
@@ -87,13 +90,16 @@ namespace CBTSecureDesktop.Services
                 var existingAnswers = await _databaseService.GetStudentAnswersAsync(ujianId, mahasiswaId);
                 foreach (var answer in existingAnswers)
                 {
-                    var question = _currentExamQuestions.FirstOrDefault(q => q.SoalId == answer.SoalId);
-                    if (question != null)
+                    if (answer.OpsiJawabanId.HasValue)
                     {
-                        int optionIndex = question.OptionIds.IndexOf(answer.OpsiJawabanId);
-                        if (optionIndex >= 0)
+                        var question = _currentExamQuestions.FirstOrDefault(q => q.SoalId == answer.SoalId);
+                        if (question != null)
                         {
-                            question.SelectedAnswer = optionIndex;
+                            int optionIndex = question.OptionIds.IndexOf(answer.OpsiJawabanId.Value);
+                            if (optionIndex >= 0)
+                            {
+                                question.SelectedAnswer = optionIndex;
+                            }
                         }
                     }
                 }
@@ -155,6 +161,22 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
+        /// Silently saves the forced stop exam calculating the score.
+        /// </summary>
+        public async Task<bool> CalculateAndSaveForceStopScoreAsync(long ujianId, long mahasiswaId)
+        {
+            try
+            {
+                return await _databaseService.SaveForceStopExamAsync(ujianId, mahasiswaId);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Submit force stopped exam error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Gets the student's exam result.
         /// </summary>
         public async Task<UjianMahasiswa?> GetExamResultAsync(long ujianId, long mahasiswaId)
@@ -166,6 +188,22 @@ namespace CBTSecureDesktop.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get exam result error: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Gets current exam status to check if it's forcibly stopped by admin
+        /// </summary>
+        public async Task<string?> GetExamStatusAsync(long ujianId, long mahasiswaId)
+        {
+            try
+            {
+                return await _databaseService.GetStudentExamStatusAsync(ujianId, mahasiswaId);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Get exam status error: {ex.Message}");
                 return null;
             }
         }

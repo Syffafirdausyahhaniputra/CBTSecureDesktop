@@ -43,7 +43,7 @@
                 <StackPanel Grid.Column="2" 
                            Orientation="Horizontal"
                            VerticalAlignment="Center">
-                    <!-- Nav Toggle -->
+                    <!-- Nav Toggle
                     <Button x:Name="ToggleNavButton"
                             Click="ToggleNavButton_Click"
                             Background="{StaticResource PolinemaWhite}"
@@ -65,6 +65,7 @@
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
+                    -->
 
                     <!-- Timer -->
                     <Border Background="{StaticResource PolinemaYellow}"
@@ -186,7 +187,7 @@
                     Background="{StaticResource PolinemaWhite}"
                     BorderBrush="{StaticResource PolinemaBorderGray}"
                     BorderThickness="1,0,0,0"
-                    Visibility="Collapsed">
+                    Visibility="Visible">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>

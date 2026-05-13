@@ -91,13 +91,15 @@ namespace CBTSecureDesktop.UI
 
             long ujianId = ujian.UjianId;
 
-            if (ujian.StatusMahasiswa == "selesai")
+            if (ujian.StatusMahasiswa == "selesai" || ujian.StatusMahasiswa == "dihentikan")
             {
                 // Here we would implement the review exam window
                 // For now, let's just show a temporary message
+                string stopMsg = ujian.StatusMahasiswa == "dihentikan" ? "\n\n(Ujian ini telah dihentikan oleh Admin/Proctor)" : "";
+
                 MessageBox.Show(
                     $"Review mode untuk ujian '{ujian.NamaUjian}' akan segera tersedia.\n" +
-                    $"Nilai Anda: {ujian.Nilai ?? 0}",
+                    $"Nilai Anda: {ujian.Nilai ?? 0}{stopMsg}",
                     "Review Ujian",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

@@ -137,7 +137,7 @@ namespace CBTSecureDesktop.Data
                     INNER JOIN t_prodi p ON u.prodi_id = p.prodi_id
                     LEFT JOIN t_ujian_mahasiswa um ON u.ujian_id = um.ujian_id AND um.mahasiswa_id = @mahasiswaId
                     WHERE km.mahasiswa_id = @mahasiswaId
-                    AND u.status IN ('menunggu', 'dimulai', 'selesai')
+                    AND u.status IN ('menunggu', 'dimulai', 'selesai', 'dihentikan')
                     ORDER BY u.created_at DESC";
 
                 using var command = new MySqlCommand(query, connection);
@@ -390,6 +390,36 @@ namespace CBTSecureDesktop.Data
         }
 
         /// <summary>
+        /// Seeds all empty answers into t_soal_mahasiswa so they can be tracked from the start
+        /// Ordered properly by iterating over the list provided by questions retrieval
+        /// </summary>
+        public async Task InitializeStudentAnswersAsync(long ujianId, long mahasiswaId, List<long> orderedSoalIds)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                foreach (var soalId in orderedSoalIds)
+                {
+                    string query = @"
+                        INSERT IGNORE INTO t_soal_mahasiswa (soal_id, mahasiswa_id, opsi_jawaban_id, created_at)
+                        VALUES (@soalId, @mahasiswaId, NULL, NOW())";
+
+                    using var command = new MySqlCommand(query, connection);
+                    command.Parameters.AddWithValue("@soalId", soalId);
+                    command.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Initialize student answers error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Gets a student's answers for an exam
         /// </summary>
         public async Task<List<SoalMahasiswa>> GetStudentAnswersAsync(long ujianId, long mahasiswaId)
@@ -419,7 +449,7 @@ namespace CBTSecureDesktop.Data
                         SoalMahasiswaId = reader.GetInt64("soal_mahasiswa_id"),
                         SoalId = reader.GetInt64("soal_id"),
                         MahasiswaId = reader.GetInt64("mahasiswa_id"),
-                        OpsiJawabanId = reader.GetInt64("opsi_jawaban_id"),
+                        OpsiJawabanId = reader.IsDBNull("opsi_jawaban_id") ? null : reader.GetInt64("opsi_jawaban_id"),
                         CreatedAt = reader.IsDBNull("created_at") ? null : reader.GetDateTime("created_at"),
                         UpdatedAt = reader.IsDBNull("updated_at") ? null : reader.GetDateTime("updated_at")
                     };
@@ -621,6 +651,69 @@ namespace CBTSecureDesktop.Data
                 System.Diagnostics.Debug.WriteLine($"Get exam result error: {ex.Message}");
                 System.Windows.MessageBox.Show($"DB Error (GetStudentExamResultAsync): {ex.Message}");
                 return null;
+            }
+        }
+
+        public async Task<string?> GetStudentExamStatusAsync(long ujianId, long mahasiswaId)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                string query = @"SELECT status 
+                                FROM t_ujian_mahasiswa 
+                                WHERE ujian_id = @ujianId AND mahasiswa_id = @mahasiswaId 
+                                ORDER BY ujianmahasiswa_id DESC LIMIT 1";
+
+                using var command = new MySqlCommand(query, connection);
+                command.Parameters.AddWithValue("@ujianId", ujianId);
+                command.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+
+                var result = await command.ExecuteScalarAsync();
+                return result?.ToString();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Get exam status error: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Saves force stopped exam and calculates the score while keeping status 'dihentikan'
+        /// </summary>
+        public async Task<bool> SaveForceStopExamAsync(long ujianId, long mahasiswaId)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                // Calculate score
+                int score = await CalculateExamScoreAsync(connection, ujianId, mahasiswaId);
+
+                // Update exam session
+                string query = @"UPDATE t_ujian_mahasiswa 
+                                SET endtime = @endTime, nilai = @nilai, updated_at = NOW() 
+                                WHERE ujian_id = @ujianId AND mahasiswa_id = @mahasiswaId 
+                                AND status = 'dihentikan'
+                                ORDER BY ujianmahasiswa_id DESC LIMIT 1";
+
+                using var command = new MySqlCommand(query, connection);
+                command.Parameters.AddWithValue("@endTime", DateTime.Now);
+                command.Parameters.AddWithValue("@nilai", score);
+                command.Parameters.AddWithValue("@ujianId", ujianId);
+                command.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+
+                int rowsAffected = await command.ExecuteNonQueryAsync();
+                return rowsAffected > 0;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Save force stop exam error: {ex.Message}");
+                // No message box here because it's called silently in the background
+                return false;
             }
         }
 

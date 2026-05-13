@@ -339,13 +339,6 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private void ToggleNavButton_Click(object sender, RoutedEventArgs e)
-        {
-            NavPanel.Visibility = NavPanel.Visibility == Visibility.Collapsed 
-                ? Visibility.Visible 
-                : Visibility.Collapsed;
-        }
-
         private void GenerateNavPanelButtons()
         {
             QuestionNavPanel.Children.Clear();
@@ -545,12 +538,40 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private void Timer_Tick(object? sender, EventArgs e)
+        private async void Timer_Tick(object? sender, EventArgs e)
         {
             _elapsedSeconds++;
             int minutes = _elapsedSeconds / 60;
             int seconds = _elapsedSeconds % 60;
             TimerText.Text = $"Time: {minutes:D2}:{seconds:D2}";
+
+            // Periksa status ujian setiap 10 detik
+            if (_elapsedSeconds % 10 == 0)
+            {
+                string? status = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId);
+                if (status == "dihentikan")
+                {
+                    _timer.Stop();
+                    SubmitButton.IsEnabled = false;
+                    this.IsEnabled = false; // block user interaction immediately
+
+                    // Secara siluman kumpulkan poinnya ke database dengan status dihentikan
+                    await _examService.CalculateAndSaveForceStopScoreAsync(_ujianId, _mahasiswaId);
+
+                    MessageBox.Show("Ujian Anda telah dihentikan secara paksa oleh Admin/Pengawas.\n\n" +
+                                    "Segala jawaban yang telah terisi telah dikumpulkan dan diakumulasikan.",
+                        "Ujian Dihentikan", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+                    DeactivateSecurityMode();
+                    var dashboard = new DashboardWindow(_authService);
+                    dashboard.Show();
+
+                    // Supaya tidak ngetrigger ExamWindow_Closing logic yg nanya "submit" lagi
+                    // Bikin flag temporer atau stop timer sblum dipanggil. 
+                    // ExamWindow_Closing ngecek kalo kiosk ga aktif, trus stop aja dan bolehin keluar
+                    this.Close();
+                }
+            }
         }
 
         private void ExamWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
