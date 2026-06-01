@@ -129,7 +129,8 @@ namespace CBTSecureDesktop.Data
                            u.kode_ujian, u.nama_ujian, u.status, u.shufflesoal,
                            u.starttime, u.endtime, u.created_at, u.updated_at,
                            m.nama as matakuliah_nama, p.nama as prodi_nama,
-                           um.status as status_mahasiswa, um.nilai as nilai_mahasiswa
+                           um.status as status_mahasiswa, um.nilai as nilai_mahasiswa,
+                           um.extendtime as extendtime
                     FROM t_ujian u
                     INNER JOIN t_ujian_kelas uk ON u.ujian_id = uk.ujian_id
                     INNER JOIN t_kelas_mahasiswa km ON uk.kelas_id = km.kelas_id
@@ -162,8 +163,9 @@ namespace CBTSecureDesktop.Data
                         UpdatedAt = reader.IsDBNull("updated_at") ? null : reader.GetDateTime("updated_at"),
                         Matakuliah = new Matakuliah { Nama = reader.GetString("matakuliah_nama") },
                         Prodi = new Prodi { Nama = reader.GetString("prodi_nama") },
-                        StatusMahasiswa = reader.IsDBNull("status_mahasiswa") ? "menunggu" : reader.GetString("status_mahasiswa"),
-                        Nilai = reader.IsDBNull("nilai_mahasiswa") ? null : reader.GetInt32("nilai_mahasiswa")
+                        StatusMahasiswa = reader.IsDBNull("status_mahasiswa") ? "none" : reader.GetString("status_mahasiswa"),
+                        Nilai = reader.IsDBNull("nilai_mahasiswa") ? null : reader.GetDouble("nilai_mahasiswa"),
+                        ExtendTimeMinutes = reader.IsDBNull("extendtime") ? 0 : reader.GetInt32("extendtime")
                     };
                     exams.Add(ujian);
                 }
@@ -337,6 +339,57 @@ namespace CBTSecureDesktop.Data
         #endregion
 
         #region Student Answers
+
+        /// <summary>
+        /// Saves a student's answer to a question (Multiple choices)
+        /// </summary>
+        public async Task<bool> SaveStudentAnswersAsync(long soalId, long mahasiswaId, List<long> opsiJawabanIds)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                // Delete existing answers to replace them
+                string deleteQuery = @"DELETE FROM t_soal_mahasiswa 
+                                       WHERE soal_id = @soalId AND mahasiswa_id = @mahasiswaId";
+
+                using var deleteCommand = new MySqlCommand(deleteQuery, connection);
+                deleteCommand.Parameters.AddWithValue("@soalId", soalId);
+                deleteCommand.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+                await deleteCommand.ExecuteNonQueryAsync();
+
+                if (opsiJawabanIds.Count == 0)
+                {
+                    string insertEmptyQuery = @"INSERT INTO t_soal_mahasiswa (soal_id, mahasiswa_id, opsi_jawaban_id, created_at) 
+                                                VALUES (@soalId, @mahasiswaId, NULL, NOW())";
+                    using var emptyCmd = new MySqlCommand(insertEmptyQuery, connection);
+                    emptyCmd.Parameters.AddWithValue("@soalId", soalId);
+                    emptyCmd.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+                    await emptyCmd.ExecuteNonQueryAsync();
+                    return true;
+                }
+
+                int rowsAffected = 0;
+                foreach (var opsiId in opsiJawabanIds)
+                {
+                    string insertQuery = @"INSERT INTO t_soal_mahasiswa (soal_id, mahasiswa_id, opsi_jawaban_id, created_at) 
+                                           VALUES (@soalId, @mahasiswaId, @opsiJawabanId, NOW())";
+                    using var insertCommand = new MySqlCommand(insertQuery, connection);
+                    insertCommand.Parameters.AddWithValue("@soalId", soalId);
+                    insertCommand.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+                    insertCommand.Parameters.AddWithValue("@opsiJawabanId", opsiId);
+                    rowsAffected += await insertCommand.ExecuteNonQueryAsync();
+                }
+
+                return rowsAffected > 0;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Save answers error: {ex.Message}");
+                return false;
+            }
+        }
 
         /// <summary>
         /// Saves a student's answer to a question
@@ -534,7 +587,7 @@ namespace CBTSecureDesktop.Data
                 await connection.OpenAsync();
 
                 // Calculate score
-                int score = await CalculateExamScoreAsync(connection, ujianId, mahasiswaId);
+                double score = await CalculateExamScoreAsync(connection, ujianId, mahasiswaId);
 
                 // Update exam session
                 string query = @"UPDATE t_ujian_mahasiswa 
@@ -563,24 +616,48 @@ namespace CBTSecureDesktop.Data
         /// <summary>
         /// Calculates the exam score for a student
         /// </summary>
-        private async Task<int> CalculateExamScoreAsync(MySqlConnection connection, long ujianId, long mahasiswaId)
+        private async Task<double> CalculateExamScoreAsync(MySqlConnection connection, long ujianId, long mahasiswaId)
         {
             try
             {
-                // Nilai = Sum of nilai from each options selected
-                string query = @"
-                    SELECT COALESCE(SUM(o.nilai), 0)
+                // 1. Dapatkan total skor mentah mahasiswa dengan memperhitungkan soal yang memiliki lebih dari satu jawaban benar
+                string rawScoreQuery = @"
+                    SELECT COALESCE(SUM(
+                        CASE 
+                            WHEN q_correct.total_correct > 0 AND sm_option.nilai = 1 THEN (1.0 / q_correct.total_correct)
+                            ELSE 0 
+                        END
+                    ), 0) as total_raw_score
                     FROM t_soal_mahasiswa sm
-                    INNER JOIN t_opsi_jawaban o ON sm.opsi_jawaban_id = o.opsi_jawaban_id
                     INNER JOIN t_soal s ON sm.soal_id = s.soal_id
+                    LEFT JOIN t_opsi_jawaban sm_option ON sm.opsi_jawaban_id = sm_option.opsi_jawaban_id
+                    LEFT JOIN (
+                        SELECT soal_id, SUM(nilai) as total_correct 
+                        FROM t_opsi_jawaban 
+                        GROUP BY soal_id
+                    ) q_correct ON s.soal_id = q_correct.soal_id
                     WHERE s.ujian_id = @ujianId AND sm.mahasiswa_id = @mahasiswaId";
 
-                using var command = new MySqlCommand(query, connection);
-                command.Parameters.AddWithValue("@ujianId", ujianId);
-                command.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+                using var rawScoreCommand = new MySqlCommand(rawScoreQuery, connection);
+                rawScoreCommand.Parameters.AddWithValue("@ujianId", ujianId);
+                rawScoreCommand.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
 
-                var result = await command.ExecuteScalarAsync();
-                return Convert.ToInt32(result);
+                double rawScore = Convert.ToDouble(await rawScoreCommand.ExecuteScalarAsync());
+
+                // 2. Dapatkan total keseluruhan soal pada ujian tersebut
+                string totalQuestionsQuery = "SELECT COUNT(*) FROM t_soal WHERE ujian_id = @ujianId";
+                using var totalQuestionsCommand = new MySqlCommand(totalQuestionsQuery, connection);
+                totalQuestionsCommand.Parameters.AddWithValue("@ujianId", ujianId);
+
+                int totalQuestions = Convert.ToInt32(await totalQuestionsCommand.ExecuteScalarAsync());
+
+                // 3. Kalkulasi nilai akhir: (Skor Mentah / Total Soal) * 100
+                if (totalQuestions == 0) return 0; // Menghindari pembagian dengan nol
+
+                double finalScore = (rawScore / totalQuestions) * 100.0;
+
+                // Pembulatan ke 2 angka di belakang koma
+                return Math.Round(finalScore, 2, MidpointRounding.AwayFromZero);
             }
             catch (Exception ex)
             {
@@ -639,7 +716,7 @@ namespace CBTSecureDesktop.Data
                         TanggalUjian = reader.IsDBNull("tanggal_ujian") ? null : reader.GetDateTime("tanggal_ujian"),
                         Status = reader.GetString("status"),
                         Keterangan = reader.IsDBNull("keterangan") ? null : reader.GetString("keterangan"),
-                        Nilai = reader.IsDBNull("nilai") ? null : reader.GetInt32("nilai"),
+                        Nilai = reader.IsDBNull("nilai") ? null : reader.GetDouble("nilai"),
                         CreatedAt = reader.IsDBNull("created_at") ? null : reader.GetDateTime("created_at"),
                         UpdatedAt = reader.IsDBNull("updated_at") ? null : reader.GetDateTime("updated_at")
                     };
@@ -691,7 +768,7 @@ namespace CBTSecureDesktop.Data
                 await connection.OpenAsync();
 
                 // Calculate score
-                int score = await CalculateExamScoreAsync(connection, ujianId, mahasiswaId);
+                double score = await CalculateExamScoreAsync(connection, ujianId, mahasiswaId);
 
                 // Update exam session
                 string query = @"UPDATE t_ujian_mahasiswa 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -11,11 +12,16 @@ namespace CBTSecureDesktop.Services
         private static readonly HttpClient _httpClient = new HttpClient();
         private readonly string _cacheDirectory;
         private readonly string _baseUrl;
+        private static readonly ConcurrentQueue<string> _downloadFailures = new();
+
+        static ImageService()
+        {
+            _httpClient.Timeout = TimeSpan.FromSeconds(30);
+        }
 
         public ImageService(string baseUrl = "http://127.0.0.1:8000/api/image/")
         {
             _baseUrl = baseUrl;
-            _httpClient.Timeout = TimeSpan.FromSeconds(30);
 
             // Set up local cache directory in AppData
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -50,7 +56,22 @@ namespace CBTSecureDesktop.Services
                 }
             }
 
-            // 2. Download from API
+            return await DownloadImageAndCacheAsync(imageId, token, cacheFilePath);
+        }
+
+        public static string[] ConsumeDownloadFailures()
+        {
+            var failures = new System.Collections.Generic.List<string>();
+            while (_downloadFailures.TryDequeue(out var failure))
+            {
+                failures.Add(failure);
+            }
+
+            return failures.ToArray();
+        }
+
+        private async Task<BitmapImage> DownloadImageAndCacheAsync(string imageId, string token, string cacheFilePath)
+        {
             try
             {
                 string requestUrl = $"{_baseUrl}{imageId}";
@@ -59,41 +80,52 @@ namespace CBTSecureDesktop.Services
                     requestUrl += $"?token={token}";
                 }
 
-                // Request the image as a byte array
                 HttpResponseMessage response = await _httpClient.GetAsync(requestUrl);
-                
+
                 if (response.IsSuccessStatusCode)
                 {
                     byte[] imageBytes = await response.Content.ReadAsByteArrayAsync();
-
-                    // 3. Save to Cache
                     _ = SaveToCacheAsync(cacheFilePath, imageBytes);
-
-                    // 4. Convert and Return
                     return CreateBitmapImageFromBytes(imageBytes);
                 }
-                else
-                {
-                    string errorMessage = $"Gagal mendownload gambar '{imageId}'. Status: {response.StatusCode}";
-                    System.Diagnostics.Debug.WriteLine(errorMessage);
-                    System.Windows.MessageBox.Show(errorMessage, "Download Gambar Gagal", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                    return GetDefaultPlaceholderImage();
-                }
-            }
-            catch (HttpRequestException httpEx)
-            {
-                string errorMessage = $"Tidak dapat mendownload gambar '{imageId}'. Pastikan server menyala.\nError: {httpEx.Message}";
-                System.Diagnostics.Debug.WriteLine(errorMessage);
-                System.Windows.MessageBox.Show(errorMessage, "Error Koneksi", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+
+                string errorMessage = $"{imageId} - Status {response.StatusCode}";
+                System.Diagnostics.Debug.WriteLine($"Gagal mendownload gambar: {errorMessage}");
+                EnqueueDownloadFailure(imageId, errorMessage);
                 return GetDefaultPlaceholderImage();
             }
             catch (Exception ex)
             {
-                string errorMessage = $"Terjadi kesalahan saat mengambil gambar '{imageId}': {ex.Message}";
-                System.Diagnostics.Debug.WriteLine(errorMessage);
-                System.Windows.MessageBox.Show(errorMessage, "Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                string errorMessage = $"{imageId} - {ex.Message}";
+                System.Diagnostics.Debug.WriteLine($"Error download gambar: {errorMessage}");
+                EnqueueDownloadFailure(imageId, errorMessage);
                 return GetDefaultPlaceholderImage();
             }
+        }
+
+        public async Task<BitmapImage> RefreshImageCacheAsync(string imageId, string token = "")
+        {
+            string cleanImageId = SanitizeFileName(imageId);
+            string cacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.img");
+
+            if (File.Exists(cacheFilePath))
+            {
+                try
+                {
+                    File.Delete(cacheFilePath);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to delete cache: {ex.Message}");
+                }
+            }
+
+            return await DownloadImageAndCacheAsync(imageId, token, cacheFilePath);
+        }
+
+        private static void EnqueueDownloadFailure(string imageId, string detail)
+        {
+            _downloadFailures.Enqueue($"{imageId}: {detail}");
         }
 
         /// <summary>

@@ -14,7 +14,7 @@ namespace CBTSecureDesktop.Models
         public DateTime? TanggalUjian { get; set; }
         public string Status { get; set; } = "menunggu"; // menunggu, dimulai, selesai, dihentikan
         public string? Keterangan { get; set; }
-        public int? Nilai { get; set; }
+        public double? Nilai { get; set; }
         public DateTime? CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }

@@ -2,8 +2,12 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Linq;
+using System.Text;
+using System.Collections.Generic;
 using CBTSecureDesktop.Security;
 using CBTSecureDesktop.Services;
+using ManagedNativeWifi;
 
 namespace CBTSecureDesktop.UI
 {
@@ -159,20 +163,18 @@ namespace CBTSecureDesktop.UI
         {
             if (_questions == null || _questions.Count == 0) return;
 
-            foreach (var question in _questions)
+            // Hanya unduh gambar untuk soal pertama secara sinkron agar segera tampil,
+            // sisa gambar akan diunduh oleh proses background (Background Download)
+            var firstQuestion = _questions[0];
+            if (firstQuestion.Images != null && firstQuestion.Images.Count > 0 && !string.IsNullOrEmpty(firstQuestion.Images[0]))
             {
-                if (question.Images != null && question.Images.Count > 0 && !string.IsNullOrEmpty(question.Images[0]))
+                try
                 {
-                    try
-                    {
-                        // Calling GetImageAsync here downloads it from the API and caches it.
-                        // Future calls in DisplayQuestion will read directly from the local cache.
-                        await _imageService.GetImageAsync(question.Images[0], "abc123");
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Failed to preload image ID {question.Images[0]}: {ex.Message}");
-                    }
+                    await _imageService.GetImageAsync(firstQuestion.Images[0], "abc123");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to preload image ID {firstQuestion.Images[0]}: {ex.Message}");
                 }
             }
         }
@@ -220,24 +222,62 @@ namespace CBTSecureDesktop.UI
             // Clear and rebuild options
             OptionsPanel.Children.Clear();
 
+            if (question.IsMultiAnswer)
+            {
+                var infoText = new TextBlock
+                {
+                    Text = "* Soal ini memiliki lebih dari satu jawaban benar. Ketuk opsi kembali untuk membatalkan pilihan.",
+                    Foreground = new SolidColorBrush(Color.FromRgb(220, 38, 38)), // Red/Warning
+                    FontStyle = FontStyles.Italic,
+                    Margin = new Thickness(0, 0, 0, 15),
+                    TextWrapping = TextWrapping.Wrap
+                };
+                OptionsPanel.Children.Add(infoText);
+            }
+
             for (int i = 0; i < question.Options.Count; i++)
             {
+                System.Windows.Controls.Primitives.ToggleButton inputControl;
+                int currentIndex = i;
+
                 var radioButton = new RadioButton
                 {
-                    Content = question.Options[i],
-                    Tag = i,
+                    Content = question.Options[currentIndex],
+                    Tag = currentIndex,
                     FontSize = 16,
                     Margin = new Thickness(0),
                     Padding = new Thickness(15),
-                    GroupName = "QuestionOptions",
-                    IsChecked = question.SelectedAnswer == i,
                     Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)), // PolinemaDarkGray
                     FontWeight = FontWeights.Medium
                 };
 
-                radioButton.Checked += OptionRadioButton_Checked;
+                if (question.IsMultiAnswer)
+                {
+                    radioButton.GroupName = $"MultiOption_{currentIndex}_{Guid.NewGuid()}";
+                    radioButton.IsChecked = question.SelectedAnswers.Contains(currentIndex);
 
-                // Style the radio button with Polinema colors
+                    radioButton.PreviewMouseLeftButtonDown += (s, e) =>
+                    {
+                        if (radioButton.IsChecked == true)
+                        {
+                            radioButton.IsChecked = false;
+                            e.Handled = true; // Prevent internal WPF RadioButton handling which avoids re-checking
+                        }
+                    };
+
+                    radioButton.Checked += OptionMultiRadioButton_Checked;
+                    radioButton.Unchecked += OptionMultiRadioButton_Unchecked;
+                }
+                else
+                {
+                    radioButton.GroupName = "QuestionOptions";
+                    radioButton.IsChecked = question.SelectedAnswer == currentIndex;
+                    radioButton.Checked += OptionRadioButton_Checked;
+                }
+
+                inputControl = radioButton;
+
+                // Style the control with Polinema colors (wrap in Border)
                 var border = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(255, 255, 255)), // White
@@ -246,13 +286,13 @@ namespace CBTSecureDesktop.UI
                     CornerRadius = new CornerRadius(10),
                     Padding = new Thickness(20, 15, 20, 15),
                     Margin = new Thickness(0, 0, 0, 12),
-                    Child = radioButton
+                    Child = inputControl
                 };
 
                 // Add hover effect
                 border.MouseEnter += (s, args) =>
                 {
-                    if (radioButton.IsChecked != true)
+                    if (inputControl.IsChecked != true)
                     {
                         border.BorderBrush = new SolidColorBrush(Color.FromRgb(30, 58, 138)); // PolinemaBluePrimary
                         border.Background = new SolidColorBrush(Color.FromRgb(245, 245, 245)); // Light gray
@@ -261,38 +301,56 @@ namespace CBTSecureDesktop.UI
 
                 border.MouseLeave += (s, args) =>
                 {
-                    if (radioButton.IsChecked != true)
+                    if (inputControl.IsChecked != true)
                     {
                         border.BorderBrush = new SolidColorBrush(Color.FromRgb(224, 224, 224));
                         border.Background = new SolidColorBrush(Color.FromRgb(255, 255, 255));
                     }
                 };
 
-                // Style when selected
-                if (radioButton.IsChecked == true)
+                // Style when selected initially
+                if (inputControl.IsChecked == true)
                 {
                     border.Background = new SolidColorBrush(Color.FromArgb(30, 30, 58, 138)); // Light blue tint
                     border.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // PolinemaGreen
                     border.BorderThickness = new Thickness(3);
                 }
 
-                radioButton.Checked += (s, args) =>
+                if (!question.IsMultiAnswer)
                 {
-                    // Reset all borders
-                    foreach (var child in OptionsPanel.Children)
+                    inputControl.Checked += (s, args) =>
                     {
-                        if (child is Border b)
+                        // Reset all borders for single choice
+                        foreach (var child in OptionsPanel.Children)
                         {
-                            b.Background = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                            b.BorderBrush = new SolidColorBrush(Color.FromRgb(224, 224, 224));
-                            b.BorderThickness = new Thickness(2);
+                            if (child is Border b)
+                            {
+                                b.Background = new SolidColorBrush(Color.FromRgb(255, 255, 255));
+                                b.BorderBrush = new SolidColorBrush(Color.FromRgb(224, 224, 224));
+                                b.BorderThickness = new Thickness(2);
+                            }
                         }
-                    }
-                    // Highlight selected
-                    border.Background = new SolidColorBrush(Color.FromArgb(30, 30, 58, 138));
-                    border.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
-                    border.BorderThickness = new Thickness(3);
-                };
+                        // Highlight selected
+                        border.Background = new SolidColorBrush(Color.FromArgb(30, 30, 58, 138));
+                        border.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+                        border.BorderThickness = new Thickness(3);
+                    };
+                }
+                else
+                {
+                    inputControl.Checked += (s, args) =>
+                    {
+                        border.Background = new SolidColorBrush(Color.FromArgb(30, 30, 58, 138));
+                        border.BorderBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+                        border.BorderThickness = new Thickness(3);
+                    };
+                    inputControl.Unchecked += (s, args) =>
+                    {
+                        border.Background = new SolidColorBrush(Color.FromRgb(255, 255, 255));
+                        border.BorderBrush = new SolidColorBrush(Color.FromRgb(224, 224, 224));
+                        border.BorderThickness = new Thickness(2);
+                    };
+                }
 
                 OptionsPanel.Children.Add(border);
             }
@@ -304,6 +362,44 @@ namespace CBTSecureDesktop.UI
             UpdateNavPanelHighlight();
         }
 
+        private void OptionMultiRadioButton_Checked(object sender, RoutedEventArgs e)
+        {
+            if (sender is RadioButton radioButton && radioButton.Tag is int answerIndex)
+            {
+                var question = _questions[_currentQuestionIndex];
+                if (!question.SelectedAnswers.Contains(answerIndex))
+                {
+                    question.SelectedAnswers.Add(answerIndex);
+                }
+
+                UpdateProgressAndSaveMulti();
+            }
+        }
+
+        private void OptionMultiRadioButton_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (sender is RadioButton radioButton && radioButton.Tag is int answerIndex)
+            {
+                var question = _questions[_currentQuestionIndex];
+                if (question.SelectedAnswers.Contains(answerIndex))
+                {
+                    question.SelectedAnswers.Remove(answerIndex);
+                }
+
+                UpdateProgressAndSaveMulti();
+            }
+        }
+
+        private async void UpdateProgressAndSaveMulti()
+        {
+            int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue || (q.IsMultiAnswer && q.SelectedAnswers.Count > 0));
+            ProgressText.Text = $"Progress: {answeredCount}/{_questions.Count} Dijawab";
+
+            UpdateNavPanelHighlight();
+
+            await _examService.SaveAnswersAsync(_questions[_currentQuestionIndex].QuestionNumber, _questions[_currentQuestionIndex].SelectedAnswers);
+        }
+
         private async void OptionRadioButton_Checked(object sender, RoutedEventArgs e)
         {
             if (sender is RadioButton radioButton && radioButton.Tag is int answerIndex)
@@ -312,7 +408,7 @@ namespace CBTSecureDesktop.UI
                 _questions[_currentQuestionIndex].SelectedAnswer = answerIndex;
 
                 // Update progress
-                int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue);
+                int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue || (q.IsMultiAnswer && q.SelectedAnswers.Count > 0));
                 ProgressText.Text = $"Progress: {answeredCount}/{_questions.Count} Dijawab";
 
                 // Update nav panel
@@ -320,6 +416,33 @@ namespace CBTSecureDesktop.UI
 
                 // Save answer to database
                 await _examService.SaveAnswerAsync(_questions[_currentQuestionIndex].QuestionNumber, answerIndex);
+            }
+        }
+
+        private async void RefreshImageButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn)
+            {
+                btn.IsEnabled = false;
+                btn.Content = "🔄 Menyegarkan...";
+
+                var question = _questions[_currentQuestionIndex];
+                if (question.Images != null && question.Images.Count > 0 && !string.IsNullOrEmpty(question.Images[0]))
+                {
+                    try
+                    {
+                        var bitmap = await _imageService.RefreshImageCacheAsync(question.Images[0], "abc123");
+                        QuestionImage.Source = bitmap;
+                        QuestionImage.Visibility = Visibility.Visible;
+                    }
+                    catch
+                    {
+                        QuestionImage.Visibility = Visibility.Collapsed;
+                    }
+                }
+
+                btn.Content = "🔄 Refresh Gambar";
+                btn.IsEnabled = true;
             }
         }
 
@@ -381,6 +504,7 @@ namespace CBTSecureDesktop.UI
                 {
                     // Remember current answers state
                     var currentAnswers = _questions.Select(q => q.SelectedAnswer).ToArray();
+                    var currentMultiAnswers = _questions.Select(q => q.SelectedAnswers.ToList()).ToArray();
                     int lastIndex = _currentQuestionIndex;
 
                     // Reload questions
@@ -391,9 +515,19 @@ namespace CBTSecureDesktop.UI
                         // Safely reapply local transient state if db miss
                         for(int i = 0; i < currentAnswers.Length && i < _questions.Count; i++)
                         {
-                            if (!_questions[i].SelectedAnswer.HasValue && currentAnswers[i].HasValue)
+                            if (!_questions[i].IsMultiAnswer)
                             {
-                                _questions[i].SelectedAnswer = currentAnswers[i];
+                                if (!_questions[i].SelectedAnswer.HasValue && currentAnswers[i].HasValue)
+                                {
+                                    _questions[i].SelectedAnswer = currentAnswers[i];
+                                }
+                            }
+                            else
+                            {
+                                if (_questions[i].SelectedAnswers.Count == 0 && currentMultiAnswers[i].Count > 0)
+                                {
+                                    _questions[i].SelectedAnswers = currentMultiAnswers[i];
+                                }
                             }
                         }
 
@@ -426,7 +560,7 @@ namespace CBTSecureDesktop.UI
             {
                 if (QuestionNavPanel.Children[i] is Button btn)
                 {
-                    bool isAnswered = _questions[i].SelectedAnswer.HasValue;
+                    bool isAnswered = _questions[i].SelectedAnswer.HasValue || (_questions[i].IsMultiAnswer && _questions[i].SelectedAnswers.Count > 0);
                     bool isCurrent = i == _currentQuestionIndex;
 
                     if (isCurrent)
@@ -456,7 +590,7 @@ namespace CBTSecureDesktop.UI
         private async void SubmitButton_Click(object sender, RoutedEventArgs e)
         {
             // Check if all questions are answered
-            var unanswered = _questions.Count(q => q.SelectedAnswer == null);
+            var unanswered = _questions.Count(q => (!q.IsMultiAnswer && q.SelectedAnswer == null) || (q.IsMultiAnswer && q.SelectedAnswers.Count == 0));
 
             if (unanswered > 0)
             {
@@ -572,6 +706,255 @@ namespace CBTSecureDesktop.UI
                     this.Close();
                 }
             }
+        }
+
+        private async void WifiButton_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Window
+            {
+                Title = "Wi-Fi Internal",
+                Width = 520,
+                Height = 460,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                WindowStyle = WindowStyle.ToolWindow,
+                ResizeMode = ResizeMode.NoResize,
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252))
+            };
+
+            var root = new StackPanel { Margin = new Thickness(20) };
+
+            root.Children.Add(new TextBlock
+            {
+                Text = "Pilih jaringan Wi-Fi cadangan yang tersedia",
+                FontSize = 18,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(30, 58, 138)),
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+
+            root.Children.Add(new TextBlock
+            {
+                Text = "Lakukan pemindaian ulang jika daftar jaringan belum muncul atau masih menampilkan jaringan lama.",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+                Margin = new Thickness(0, 0, 0, 14)
+            });
+
+            var scanButton = new Button
+            {
+                Content = "🔄 Pindai Ulang Jaringan",
+                Style = (Style)FindResource("PolinemaButtonSecondary"),
+                Padding = new Thickness(16, 10, 16, 10),
+                Margin = new Thickness(0, 0, 0, 14)
+            };
+            root.Children.Add(scanButton);
+
+            var networkBox = new ComboBox
+            {
+                Height = 40,
+                Margin = new Thickness(0, 0, 0, 10),
+                DisplayMemberPath = nameof(WifiNetworkOption.DisplayText)
+            };
+            root.Children.Add(networkBox);
+
+            root.Children.Add(new TextBlock
+            {
+                Text = "Password Wi-Fi",
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
+                Margin = new Thickness(0, 6, 0, 6)
+            });
+
+            var passwordHint = new TextBlock
+            {
+                Text = "Isi hanya jika jaringan memakai password. Jika Wi-Fi terbuka, biarkan kosong.",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            root.Children.Add(passwordHint);
+
+            var passwordBox = new PasswordBox
+            {
+                Height = 38,
+                Margin = new Thickness(0, 0, 0, 16),
+                Padding = new Thickness(10, 8, 10, 8)
+            };
+            root.Children.Add(passwordBox);
+
+            var statusText = new TextBlock
+            {
+                Text = "Status: siap memindai.",
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            root.Children.Add(statusText);
+
+            var connectButton = new Button
+            {
+                Content = "Hubungkan ke Wi-Fi",
+                Style = (Style)FindResource("PolinemaButtonPrimary"),
+                Padding = new Thickness(16, 10, 16, 10),
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            root.Children.Add(connectButton);
+
+            var networksTemp = new List<WifiNetworkOption>();
+
+            async Task RefreshNetworksAsync()
+            {
+                try
+                {
+                    statusText.Text = "Status: memindai jaringan...";
+                    scanButton.IsEnabled = false;
+                    connectButton.IsEnabled = false;
+                    networkBox.ItemsSource = null;
+                    networksTemp.Clear();
+
+                    await NativeWifi.ScanNetworksAsync(timeout: TimeSpan.FromSeconds(4));
+
+                    var scanned = new List<WifiNetworkOption>();
+                    foreach (var wifiInterface in NativeWifi.EnumerateInterfaces())
+                    {
+                        try
+                        {
+                            var (scanResult, availableNetworks) = NativeWifi.EnumerateAvailableNetworks(wifiInterface.Id);
+                            if (scanResult != ActionResult.Success)
+                            {
+                                continue;
+                            }
+
+                            foreach (var network in availableNetworks)
+                            {
+                                var ssid = network.Ssid.ToString();
+                                if (string.IsNullOrWhiteSpace(ssid))
+                                {
+                                    continue;
+                                }
+
+                                scanned.Add(new WifiNetworkOption
+                                {
+                                    InterfaceId = wifiInterface.Id,
+                                    Ssid = ssid,
+                                    SignalQuality = (int)network.SignalQuality,
+                                    BssType = network.BssType
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Wi-Fi scan per interface failed: {ex.Message}");
+                        }
+                    }
+
+                    networksTemp.AddRange(scanned
+                        .GroupBy(x => x.Ssid, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => g.OrderByDescending(x => x.SignalQuality).First())
+                        .OrderByDescending(x => x.SignalQuality)
+                        .ToList());
+
+                    networkBox.ItemsSource = networksTemp;
+                    if (networkBox.Items.Count > 0)
+                    {
+                        networkBox.SelectedIndex = 0;
+                        statusText.Text = $"Status: {networksTemp.Count} jaringan ditemukan.";
+                    }
+                    else
+                    {
+                        statusText.Text = "Status: tidak ada jaringan Wi-Fi yang terdeteksi.";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    statusText.Text = $"Status: gagal memindai ({ex.Message})";
+                }
+                finally
+                {
+                    scanButton.IsEnabled = true;
+                    connectButton.IsEnabled = true;
+                }
+            }
+
+            scanButton.Click += async (_, __) => await RefreshNetworksAsync();
+
+            connectButton.Click += async (_, __) =>
+            {
+                if (networkBox.SelectedItem is not WifiNetworkOption selectedNetwork)
+                {
+                    MessageBox.Show("Pilih jaringan Wi-Fi terlebih dahulu.", "Wi-Fi", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                try
+                {
+                    connectButton.IsEnabled = false;
+                    scanButton.IsEnabled = false;
+                    statusText.Text = $"Status: menyambungkan ke {selectedNetwork.Ssid}...";
+
+                    string profileXml = string.IsNullOrWhiteSpace(passwordBox.Password)
+                        ? $@"<?xml version=""1.0""?>
+<WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
+    <name>{selectedNetwork.Ssid}</name>
+    <SSIDConfig><SSID><name>{selectedNetwork.Ssid}</name></SSID></SSIDConfig>
+    <connectionType>ESS</connectionType>
+    <connectionMode>manual</connectionMode>
+    <MSM><security><authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption></security></MSM>
+</WLANProfile>"
+                        : $@"<?xml version=""1.0""?>
+<WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
+    <name>{selectedNetwork.Ssid}</name>
+    <SSIDConfig><SSID><name>{selectedNetwork.Ssid}</name></SSID></SSIDConfig>
+    <connectionType>ESS</connectionType>
+    <connectionMode>manual</connectionMode>
+    <MSM>
+        <security>
+            <authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>
+            <sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{passwordBox.Password}</keyMaterial></sharedKey>
+        </security>
+    </MSM>
+</WLANProfile>";
+
+                    NativeWifi.SetProfile(selectedNetwork.InterfaceId, ProfileType.AllUser, profileXml, null, true);
+                    var isConnected = await NativeWifi.ConnectNetworkAsync(selectedNetwork.InterfaceId, selectedNetwork.Ssid, selectedNetwork.BssType, TimeSpan.FromSeconds(20));
+
+                    if (isConnected)
+                    {
+                        MessageBox.Show($"Berhasil terhubung ke {selectedNetwork.Ssid}.", "Wi-Fi", MessageBoxButton.OK, MessageBoxImage.Information);
+                        dialog.Close();
+                    }
+                    else
+                    {
+                        statusText.Text = "Status: koneksi gagal, coba ulangi atau periksa password.";
+                        MessageBox.Show("Gagal terhubung. Silakan cek password atau coba pindai ulang jaringan.", "Wi-Fi", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    statusText.Text = $"Status: gagal menyambung ({ex.Message})";
+                    MessageBox.Show($"Terjadi kesalahan: {ex.Message}", "Wi-Fi", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    connectButton.IsEnabled = true;
+                    scanButton.IsEnabled = true;
+                }
+            };
+
+            dialog.Content = root;
+            await RefreshNetworksAsync();
+            dialog.ShowDialog();
+        }
+
+        private sealed class WifiNetworkOption
+        {
+            public Guid InterfaceId { get; init; }
+            public string Ssid { get; init; } = string.Empty;
+            public int SignalQuality { get; init; }
+            public BssType BssType { get; init; }
+            public string DisplayText => $"{Ssid} ({SignalQuality}%)";
+            public override string ToString() => DisplayText;
         }
 
         private void ExamWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)

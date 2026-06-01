@@ -150,6 +150,33 @@
                               Margin="0,15,0,0"/>
                 </StackPanel>
 
+                <!-- Sections are reordered. Note ExamsList is shown concurrently with progress. -->
+                <!-- Download Progress Indicator -->
+                <Border x:Name="DownloadPanel" 
+                        Visibility="Collapsed"
+                        Background="{StaticResource PolinemaWhite}"
+                        BorderBrush="{StaticResource PolinemaBorderGray}"
+                        BorderThickness="2"
+                        CornerRadius="12"
+                        Padding="25"
+                        Margin="0,0,0,20">
+                    <StackPanel HorizontalAlignment="Center">
+                        <ProgressBar x:Name="DownloadProgressBar"
+                                    Minimum="0" Maximum="100" Value="0"
+                                    Height="8"
+                                    Width="300"
+                                    Foreground="{StaticResource PolinemaBluePrimary}"
+                                    Background="{StaticResource PolinemaBorderGray}"/>
+                        <TextBlock x:Name="DownloadProgressText"
+                                  Text="Mengunduh gambar 0 dari 0..."
+                                  FontSize="14"
+                                  FontWeight="SemiBold"
+                                  Foreground="{StaticResource PolinemaTextGray}"
+                                  HorizontalAlignment="Center"
+                                  Margin="0,15,0,0"/>
+                    </StackPanel>
+                </Border>
+
                 <!-- Exams List -->
                 <ItemsControl x:Name="ExamsListView" Visibility="Collapsed">
                     <ItemsControl.ItemTemplate>
@@ -227,7 +254,7 @@
                                                    CornerRadius="10"
                                                    Padding="8,3"
                                                    Margin="0,0,15,0">
-                                                <TextBlock Text="{Binding StatusMahasiswa}" 
+                                                <TextBlock Text="{Binding DisplayStatus}" 
                                                           FontSize="12"
                                                           FontWeight="Bold"
                                                           Foreground="{StaticResource PolinemaWhite}"/>
@@ -243,13 +270,21 @@
                                     </StackPanel>
 
                                     <!-- Action Button / Score Display -->
-                                    <Button Grid.Column="2" 
-                                            VerticalAlignment="Center"
-                                            Content="{Binding ActionText}"
-                                            Style="{StaticResource PolinemaButtonPrimary}"
-                                            Padding="25,15"
-                                            FontSize="15"
-                                            Click="StartExamButton_Click"/>
+                                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Orientation="Horizontal">
+                                        <Button Content="Persiapan Ujian"
+                                                Visibility="{Binding PersiapanVisibility}"
+                                                Style="{StaticResource PolinemaButtonSecondary}"
+                                                Padding="15,15"
+                                                FontSize="15"
+                                                Margin="0,0,10,0"
+                                                Click="PersiapanButton_Click"/>
+                                        <Button Content="{Binding ActionText}"
+                                                IsEnabled="{Binding IsActionEnabled}"
+                                                Style="{StaticResource PolinemaButtonPrimary}"
+                                                Padding="25,15"
+                                                FontSize="15"
+                                                Click="StartExamButton_Click"/>
+                                    </StackPanel>
                                 </Grid>
                             </Border>
                         </DataTemplate>

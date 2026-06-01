@@ -160,7 +160,17 @@
                                       TextWrapping="Wrap"
                                       LineHeight="28"
                                       Margin="0,0,0,15"/>
-                            <Image x:Name="QuestionImage" Stretch="Uniform" MaxHeight="300" HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,0,15"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,15">
+                                <Image x:Name="QuestionImage" Stretch="Uniform" MaxHeight="300" HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,15,0"/>
+                                <Button x:Name="RefreshImageButton"
+                                        Content="🔄 Refresh Gambar"
+                                        Style="{StaticResource PolinemaButtonSecondary}"
+                                        Padding="10,5"
+                                        FontSize="12"
+                                        VerticalAlignment="Top"
+                                        Visibility="{Binding Visibility, ElementName=QuestionImage}"
+                                        Click="RefreshImageButton_Click"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 
@@ -218,6 +228,7 @@
                     <ColumnDefinition Width="Auto"/> <!-- Prev -->
                     <ColumnDefinition Width="Auto"/> <!-- Next -->
                     <ColumnDefinition Width="*"/>    <!-- Middle Section / Progress -->
+                    <ColumnDefinition Width="Auto"/> <!-- Wifi -->
                     <ColumnDefinition Width="Auto"/> <!-- Submit -->
                 </Grid.ColumnDefinitions>
 
@@ -263,9 +274,19 @@
                     </StackPanel>
                 </Border>
 
+                <!-- WiFi Button -->
+                <Button x:Name="WifiButton" 
+                       Grid.Column="3"
+                       Margin="0,0,15,0"
+                       Content="📡 Wi-Fi" 
+                       Style="{StaticResource PolinemaButtonSecondary}"
+                       Padding="25,12"
+                       FontSize="14"
+                       Click="WifiButton_Click"/>
+
                 <!-- Submit Button -->
                 <Button x:Name="SubmitButton" 
-                       Grid.Column="3"
+                       Grid.Column="4"
                        HorizontalAlignment="Right"
                        Content="✓ SELESAI &amp; KIRIM" 
                        Style="{StaticResource PolinemaButtonPrimary}"
