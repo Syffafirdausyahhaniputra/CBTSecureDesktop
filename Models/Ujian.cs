@@ -90,7 +90,7 @@ namespace CBTSecureDesktop.Models
             }
         }
 
-        public string PersiapanVisibility 
+        public System.Windows.Visibility PersiapanVisibility 
         {
             get
             {
@@ -99,9 +99,9 @@ namespace CBTSecureDesktop.Models
 
                 // Munculkan persiapan ujian hanya sebelum ujian dimulai (atau terserah logic sebelum waktu habis/review).
                 if (statusGlobal == "selesai" || now > ActualEndTime)
-                    return "Collapsed";
+                    return System.Windows.Visibility.Collapsed;
 
-                return "Visible";
+                return System.Windows.Visibility.Visible;
             }
         }
 
@@ -114,13 +114,10 @@ namespace CBTSecureDesktop.Models
                 string statusMhs = (StatusMahasiswa ?? string.Empty).Trim().ToLower();
                 string statusGlobal = (Status ?? string.Empty).Trim().ToLower();
 
-                // CEK STATUS GLOBAL / SETELAH WAKTU HABIS
+                // If global status is finished or time expired, hide the action button by returning empty text
                 if (statusGlobal == "selesai" || now > ActualEndTime)
                 {
-                    if (statusMhs == "selesai" || statusMhs == "dimulai" || statusMhs == "dihentikan")
-                        return "Review Ujian";
-
-                    return "Berakhir";
+                    return string.Empty; // no button shown
                 }
 
                 // 1. BEFORE EXAM
@@ -142,7 +139,7 @@ namespace CBTSecureDesktop.Models
 
                 if (statusMhs == "selesai")
                 {
-                    return "Review Ujian";
+                    return string.Empty;
                 }
 
                 if (statusMhs == "dihentikan")
@@ -154,17 +151,34 @@ namespace CBTSecureDesktop.Models
             }
         }
 
+        public System.Windows.Visibility ActionVisibility
+        {
+            get
+            {
+                var now = DateTime.Now;
+                string statusGlobal = (Status ?? string.Empty).Trim().ToLower();
+
+                if (statusGlobal == "selesai" || now > ActualEndTime)
+                    return System.Windows.Visibility.Collapsed;
+
+                // also hide if there is no action text
+                if (string.IsNullOrEmpty(ActionText))
+                    return System.Windows.Visibility.Collapsed;
+
+                return System.Windows.Visibility.Visible;
+            }
+        }
+
         public bool IsActionEnabled
         {
             get
             {
                 var now = DateTime.Now;
 
-                // CEK STATUS GLOBAL / SETELAH WAKTU HABIS
+                // If exam finished globally or time expired, hide/disable action button entirely
                 if (Status == "selesai" || now > ActualEndTime)
                 {
-                    // Tombol review aktif untuk mahasiswa yang ikut ujian (termasuk yang dihentikan)
-                    return StatusMahasiswa == "selesai" || StatusMahasiswa == "dimulai" || StatusMahasiswa == "dihentikan";
+                    return false;
                 }
 
                 // 1. BEFORE EXAM

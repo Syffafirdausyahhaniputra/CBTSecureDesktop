@@ -279,6 +279,7 @@
                                                 Margin="0,0,10,0"
                                                 Click="PersiapanButton_Click"/>
                                         <Button Content="{Binding ActionText}"
+                                                Visibility="{Binding ActionVisibility}"
                                                 IsEnabled="{Binding IsActionEnabled}"
                                                 Style="{StaticResource PolinemaButtonPrimary}"
                                                 Padding="25,15"

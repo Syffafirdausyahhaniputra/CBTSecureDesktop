@@ -68,22 +68,40 @@
                     -->
 
                     <!-- Timer -->
-                    <Border Background="{StaticResource PolinemaYellow}"
+                        <Border Background="{StaticResource PolinemaYellow}"
                            CornerRadius="10"
-                           Padding="15,10"
+                           Padding="10"
                            Margin="0,0,15,0">
                         <Border.Effect>
                             <DropShadowEffect Color="#000000" Direction="270" ShadowDepth="0" Opacity="0.2" BlurRadius="8"/>
                         </Border.Effect>
-                        <StackPanel Orientation="Horizontal">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="⏱️"
-                                      FontSize="18"
-                                      Margin="0,0,8,0"/>
-                            <TextBlock x:Name="TimerText" 
-                                      Text="00:00:00" 
-                                      FontSize="18" 
-                                      FontWeight="Bold"
-                                      Foreground="{StaticResource PolinemaBluePrimary}"/>
+                                      FontSize="20"
+                                      Margin="0,0,12,0"
+                                      VerticalAlignment="Center"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Current Clock -->
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <!-- <TextBlock Text="Jam saat ini" FontSize="11" Foreground="{StaticResource PolinemaBluePrimary}" HorizontalAlignment="Center"/> -->
+                                    <TextBlock x:Name="ClockText" Text="--:--:--" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PolinemaBluePrimary}" HorizontalAlignment="Center"/>
+                                </StackPanel>
+
+                                <!-- Spacer / separator -->
+                                <Border Grid.Column="1" Width="1" Background="{StaticResource PolinemaBluePrimary}" HorizontalAlignment="Center"/>
+
+                                <!-- Remaining Time -->
+                                <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                    <TextBlock Text="Waktu tersisa" FontSize="11" Foreground="{StaticResource PolinemaBluePrimary}" HorizontalAlignment="Center"/>
+                                    <TextBlock x:Name="TimerText" Text="00:00:00" FontSize="16" FontWeight="Bold" Foreground="{StaticResource PolinemaBluePrimary}" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
                     </Border>
 
@@ -98,6 +116,7 @@
                                   Text="Soal 1 dari 5" 
                                   FontSize="14"
                                   FontWeight="SemiBold"
+                                  VerticalAlignment="Center"
                                   Foreground="{StaticResource PolinemaBluePrimary}"/>
                     </Border>
                 </StackPanel>
@@ -132,14 +151,17 @@
                         </Border>
 
                         <!-- Refresh Button -->
-                        <Button x:Name="RefreshExamButton"
-                                Grid.Column="1"
-                                HorizontalAlignment="Right"
-                                Content="🔄 Refresh Soal"
-                                Style="{StaticResource PolinemaButtonSecondary}"
-                                Padding="15,8"
-                                FontSize="13"
-                                Click="RefreshExamButton_Click"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <TextBlock x:Name="OfflineStatusText" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="DarkOrange" FontWeight="SemiBold" Visibility="Collapsed">Offline: jawaban disimpan sementara</TextBlock>
+                                                        <TextBlock x:Name="PendingCountText" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="White" FontWeight="Bold" Background="DarkRed" Padding="4,2" Visibility="Collapsed" Text="" ToolTip="Ada jawaban yang tersimpan lokal dan belum tersinkron. Sambungkan internet untuk mengirimnya ke server."/>
+                            <Button x:Name="RefreshExamButton"
+                                    HorizontalAlignment="Right"
+                                    Content="🔄 Refresh Soal"
+                                    Style="{StaticResource PolinemaButtonSecondary}"
+                                    Padding="15,8"
+                                    FontSize="13"
+                                    Click="RefreshExamButton_Click"/>
+                        </StackPanel>
                     </Grid>
 
                     <!-- Question Text -->

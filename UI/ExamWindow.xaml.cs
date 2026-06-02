@@ -32,6 +32,10 @@ namespace CBTSecureDesktop.UI
         // Image Service
         private readonly ImageService _imageService = new ImageService();
 
+        // Cached values to compute remaining time efficiently
+        private DateTime? _examGlobalEndTime = null;
+        private int _examGlobalExtendMinutes = 0;
+
         public ExamWindow(AuthService authService, ExamService examService, long ujianId, long mahasiswaId)
         {
             InitializeComponent();
@@ -50,6 +54,60 @@ namespace CBTSecureDesktop.UI
             _timer = new DispatcherTimer();
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += Timer_Tick;
+
+            // Start a brief network check to update offline status indicator and subscribe to pending count
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(500);
+                    var online = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId) != null; // quick check
+                    Application.Current.Dispatcher.Invoke(() => OfflineStatusText.Visibility = online ? Visibility.Collapsed : Visibility.Visible);
+
+                    // subscribe to pending updates from service
+                    _examService.PendingCountChanged += cnt => Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        PendingCountText.Text = cnt > 0 ? $"({cnt})" : string.Empty;
+                        PendingCountText.Visibility = cnt > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    });
+
+                    // initialize pending count
+                    var initial = await _examService.GetPendingCountAsync();
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        PendingCountText.Text = initial > 0 ? $"({initial})" : string.Empty;
+                        PendingCountText.Visibility = initial > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    });
+                }
+                catch { }
+            });
+
+            // Monitor network events via periodic small ping; when coming back online trigger immediate flush
+            _ = Task.Run(async () =>
+            {
+                bool lastOnline = true;
+                while (true)
+                {
+                    try
+                    {
+                        var online = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId) != null;
+                        if (online && !lastOnline)
+                        {
+                            // we came back online, trigger immediate flush
+                            await _examService.TriggerFlushAsync();
+                            Application.Current.Dispatcher.Invoke(() => OfflineStatusText.Visibility = Visibility.Collapsed);
+                        }
+                        else if (!online)
+                        {
+                            Application.Current.Dispatcher.Invoke(() => OfflineStatusText.Visibility = Visibility.Visible);
+                        }
+                        lastOnline = online;
+                    }
+                    catch { }
+
+                    await Task.Delay(5000);
+                }
+            });
 
             Loaded += ExamWindow_Loaded;
             Closing += ExamWindow_Closing;
@@ -86,10 +144,25 @@ namespace CBTSecureDesktop.UI
                 // Build Navigation Panel
                 GenerateNavPanelButtons();
 
-                // Start timer
-                _timer.Start();
+                // Start timer and refresh clock
 
-                this.IsEnabled = true;
+                    // Attempt to read global exam end time once to avoid repeated DB queries
+                    try
+                    {
+                        var exams = await _examService.GetAvailableExamsAsync(_mahasiswaId);
+                        var ujianInfo = exams.FirstOrDefault(u => u.UjianId == _ujianId);
+                        if (ujianInfo != null)
+                        {
+                            _examGlobalEndTime = ujianInfo.EndTime;
+                            _examGlobalExtendMinutes = ujianInfo.ExtendTimeMinutes;
+                        }
+                    }
+                    catch { }
+
+                    _timer.Start();
+                    UpdateClockAndRemainingTime();
+
+                    this.IsEnabled = true;
             }
             catch (Exception ex)
             {
@@ -154,6 +227,58 @@ namespace CBTSecureDesktop.UI
             {
                 System.Diagnostics.Debug.WriteLine($"Error deactivating security: {ex.Message}");
             }
+        }
+
+        private void UpdateClockAndRemainingTime()
+        {
+            try
+            {
+                var now = DateTime.Now;
+                ClockText.Text = now.ToString("HH:mm:ss");
+
+                // Query the global exam record (t_ujian) for authoritative end time
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var ujian = await _examService.GetExamByIdAsync(_ujianId);
+                        DateTime? endTime = ujian?.EndTime ?? _examGlobalEndTime;
+                        int extendMinutes = ujian?.ExtendTimeMinutes ?? _examGlobalExtendMinutes;
+
+                        if (!endTime.HasValue || endTime == DateTime.MinValue)
+                        {
+                            Application.Current.Dispatcher.Invoke(() => TimerText.Text = "--:--:--");
+                            return;
+                        }
+
+                        DateTime finalEnd = endTime.Value.AddMinutes(extendMinutes);
+
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            var remaining = finalEnd - DateTime.Now;
+
+                            if (remaining <= TimeSpan.Zero)
+                            {
+                                TimerText.Text = "00:00:00";
+                            }
+                            else
+                            {
+                                var total = (long)remaining.TotalSeconds;
+                                var hours = total / 3600;
+                                var minutes = (total % 3600) / 60;
+                                var seconds = total % 60;
+                                TimerText.Text = $"{hours:D2}:{minutes:D2}:{seconds:D2}";
+                            }
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error updating remaining time: {ex.Message}");
+                        Application.Current.Dispatcher.Invoke(() => TimerText.Text = "--:--:--");
+                    }
+                });
+            }
+            catch { }
         }
 
         /// <summary>
@@ -632,19 +757,32 @@ namespace CBTSecureDesktop.UI
 
                 if (success)
                 {
-                    // Get exam result
-                    var result = await _examService.GetExamResultAsync(_ujianId, _mahasiswaId);
-
-                    string message = "Ujian berhasil dikirim!\n\n" +
-                                   $"Waktu pengerjaan: {_elapsedSeconds / 60} menit {_elapsedSeconds % 60} detik";
-
-                    if (result != null && result.Nilai.HasValue)
-                    {
-                        message += $"\n\n📊 Nilai Anda: {result.Nilai.Value}%";
-                    }
+                    // Keep the feedback minimal: only show that exam is finished
+                    string message = "Ujian berhasil dikirim!\n\nStatus: Selesai." +
+                                     $"\nWaktu pengerjaan: {_elapsedSeconds / 60} menit {_elapsedSeconds % 60} detik";
 
                     MessageBox.Show(message, "Pengiriman Selesai",
                         MessageBoxButton.OK, MessageBoxImage.Information);
+
+                    // Delete any downloaded cached images related to this exam
+                    try
+                    {
+                        var imageIds = _questions
+                            .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
+                            .Where(id => !string.IsNullOrWhiteSpace(id))
+                            .Distinct()
+                            .ToList();
+
+                        if (imageIds.Count > 0)
+                        {
+                            // Fire-and-forget deletion to speed up returning to dashboard.
+                            _ = _imageService.DeleteCacheFilesAsync(imageIds);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after submit: {ex.Message}");
+                    }
 
                     // Deactivate security and navigate to dashboard
                     DeactivateSecurityMode();
@@ -675,9 +813,7 @@ namespace CBTSecureDesktop.UI
         private async void Timer_Tick(object? sender, EventArgs e)
         {
             _elapsedSeconds++;
-            int minutes = _elapsedSeconds / 60;
-            int seconds = _elapsedSeconds % 60;
-            TimerText.Text = $"Time: {minutes:D2}:{seconds:D2}";
+            UpdateClockAndRemainingTime();
 
             // Periksa status ujian setiap 10 detik
             if (_elapsedSeconds % 10 == 0)
@@ -695,6 +831,26 @@ namespace CBTSecureDesktop.UI
                     MessageBox.Show("Ujian Anda telah dihentikan secara paksa oleh Admin/Pengawas.\n\n" +
                                     "Segala jawaban yang telah terisi telah dikumpulkan dan diakumulasikan.",
                         "Ujian Dihentikan", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+                    // Delete any downloaded cached images related to this exam
+                    try
+                    {
+                        var imageIds = _questions
+                            .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
+                            .Where(id => !string.IsNullOrWhiteSpace(id))
+                            .Distinct()
+                            .ToList();
+
+                        if (imageIds.Count > 0)
+                        {
+                            // Fire-and-forget deletion to speed up returning to dashboard.
+                            _ = _imageService.DeleteCacheFilesAsync(imageIds);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after forced stop: {ex.Message}");
+                    }
 
                     DeactivateSecurityMode();
                     var dashboard = new DashboardWindow(_authService);

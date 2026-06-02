@@ -1,3 +1,10 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Text.Json;
 using CBTSecureDesktop.Data;
 using CBTSecureDesktop.Models;
 
@@ -30,9 +37,47 @@ namespace CBTSecureDesktop.Services
         private long _currentMahasiswaId;
         private long _currentExamSessionId;
 
+        // Pending queue file and sync controls
+        private readonly string _pendingFilePath;
+        private readonly SemaphoreSlim _pendingLock = new(1,1);
+        private readonly TimeSpan _flushInterval = TimeSpan.FromSeconds(30);
+        private CancellationTokenSource? _flushCts;
+
+        // Pending notifications
+        public event Action<int>? PendingCountChanged;
+
         public ExamService()
         {
             _databaseService = new DatabaseService();
+
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var dir = Path.Combine(appData, "CBTSecureDesktop");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            _pendingFilePath = Path.Combine(dir, "PendingAnswers.json");
+
+            // Start background flush loop
+            _flushCts = new CancellationTokenSource();
+            _ = Task.Run(() => FlushLoopAsync(_flushCts.Token));
+        }
+
+        // Public helper to get current pending count
+        public async Task<int> GetPendingCountAsync()
+        {
+            var list = await ReadPendingAsync();
+            return list.Count;
+        }
+
+        // Public trigger to request an immediate flush
+        public Task TriggerFlushAsync()
+        {
+            return Task.Run(async () =>
+            {
+                try
+                {
+                    await TryFlushOnceAsync();
+                }
+                catch { }
+            });
         }
 
         /// <summary>
@@ -48,6 +93,22 @@ namespace CBTSecureDesktop.Services
             {
                 System.Diagnostics.Debug.WriteLine($"Get available exams error: {ex.Message}");
                 return new List<Ujian>();
+            }
+        }
+
+        /// <summary>
+        /// Gets global exam (t_ujian) information by id.
+        /// </summary>
+        public async Task<Ujian?> GetExamByIdAsync(long ujianId)
+        {
+            try
+            {
+                return await _databaseService.GetExamByIdAsync(ujianId);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Get exam by id error: {ex.Message}");
+                return null;
             }
         }
 
@@ -174,12 +235,31 @@ namespace CBTSecureDesktop.Services
                     question.SelectedAnswer = answerIndex;
                     long opsiJawabanId = question.OptionIds[answerIndex];
 
-                    // Save to database
-                    return await _databaseService.SaveStudentAnswerAsync(
+                    // Try saving to database first
+                    bool saved = await _databaseService.SaveStudentAnswerAsync(
                         question.SoalId,
                         _currentMahasiswaId,
                         opsiJawabanId
                     );
+
+                    if (!saved)
+                    {
+                        // Persist to local pending queue for retry
+                        var entry = new PendingAnswer
+                        {
+                            Type = PendingEntryType.SingleAnswer,
+                            UjianId = _currentUjianId,
+                            MahasiswaId = _currentMahasiswaId,
+                            SoalId = question.SoalId,
+                            OpsiJawabanId = opsiJawabanId
+                        };
+                        await EnqueuePendingAsync(entry);
+
+                        // Return true to avoid spamming the UI with errors — student progress continues
+                        return true;
+                    }
+
+                    return true;
                 }
                 return false;
             }
@@ -204,12 +284,28 @@ namespace CBTSecureDesktop.Services
                     var opsiJawabanIds = answerIndices.Where(i => i >= 0 && i < question.OptionIds.Count)
                                                       .Select(i => question.OptionIds[i]).ToList();
 
-                    // Save to database
-                    return await _databaseService.SaveStudentAnswersAsync(
+                    // Try save to DB
+                    bool saved = await _databaseService.SaveStudentAnswersAsync(
                         question.SoalId,
                         _currentMahasiswaId,
                         opsiJawabanIds
                     );
+
+                    if (!saved)
+                    {
+                        var entry = new PendingAnswer
+                        {
+                            Type = PendingEntryType.MultipleAnswers,
+                            UjianId = _currentUjianId,
+                            MahasiswaId = _currentMahasiswaId,
+                            SoalId = question.SoalId,
+                            OpsiJawabanIds = opsiJawabanIds
+                        };
+                        await EnqueuePendingAsync(entry);
+                        return true;
+                    }
+
+                    return true;
                 }
                 return false;
             }
@@ -227,12 +323,32 @@ namespace CBTSecureDesktop.Services
         {
             try
             {
-                // End exam session and calculate score
-                return await _databaseService.EndExamSessionAsync(ujianId, mahasiswaId);
+                // Try to end exam session on server
+                bool ok = await _databaseService.EndExamSessionAsync(ujianId, mahasiswaId);
+                if (!ok)
+                {
+                    // Enqueue a pending submit so background will retry
+                    var entry = new PendingAnswer
+                    {
+                        Type = PendingEntryType.SubmitExam,
+                        UjianId = ujianId,
+                        MahasiswaId = mahasiswaId
+                    };
+                    await EnqueuePendingAsync(entry);
+                }
+                return ok;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Submit exam error: {ex.Message}");
+                // enqueue pending submit
+                var entry = new PendingAnswer
+                {
+                    Type = PendingEntryType.SubmitExam,
+                    UjianId = ujianId,
+                    MahasiswaId = mahasiswaId
+                };
+                await EnqueuePendingAsync(entry);
                 return false;
             }
         }
@@ -244,11 +360,29 @@ namespace CBTSecureDesktop.Services
         {
             try
             {
-                return await _databaseService.SaveForceStopExamAsync(ujianId, mahasiswaId);
+                bool ok = await _databaseService.SaveForceStopExamAsync(ujianId, mahasiswaId);
+                if (!ok)
+                {
+                    var entry = new PendingAnswer
+                    {
+                        Type = PendingEntryType.ForceStop,
+                        UjianId = ujianId,
+                        MahasiswaId = mahasiswaId
+                    };
+                    await EnqueuePendingAsync(entry);
+                }
+                return ok;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Submit force stopped exam error: {ex.Message}");
+                var entry = new PendingAnswer
+                {
+                    Type = PendingEntryType.ForceStop,
+                    UjianId = ujianId,
+                    MahasiswaId = mahasiswaId
+                };
+                await EnqueuePendingAsync(entry);
                 return false;
             }
         }
@@ -289,6 +423,156 @@ namespace CBTSecureDesktop.Services
         /// Gets the current exam questions.
         /// </summary>
         public List<ExamQuestion> GetCurrentQuestions() => _currentExamQuestions;
+
+        // -------------------- Pending Queue Helpers --------------------
+        private async Task EnqueuePendingAsync(PendingAnswer entry)
+        {
+            await _pendingLock.WaitAsync();
+            try
+            {
+                var list = await ReadPendingAsync();
+                list.Add(entry);
+                // write atomically
+                var tmp = _pendingFilePath + ".tmp";
+                var json = System.Text.Json.JsonSerializer.Serialize(list);
+                await File.WriteAllTextAsync(tmp, json);
+                File.Move(tmp, _pendingFilePath, true);
+
+                PendingCountChanged?.Invoke(list.Count);
+            }
+            finally
+            {
+                _pendingLock.Release();
+            }
+        }
+
+        private async Task<List<PendingAnswer>> ReadPendingAsync()
+        {
+            if (!File.Exists(_pendingFilePath)) return new List<PendingAnswer>();
+            try
+            {
+                var txt = await File.ReadAllTextAsync(_pendingFilePath);
+                if (string.IsNullOrWhiteSpace(txt)) return new List<PendingAnswer>();
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<PendingAnswer>>(txt);
+                return list ?? new List<PendingAnswer>();
+            }
+            catch
+            {
+                return new List<PendingAnswer>();
+            }
+        }
+
+        private async Task FlushLoopAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await TryFlushOnceAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Flush loop error: {ex.Message}");
+                }
+
+                try
+                {
+                    await Task.Delay(_flushInterval, ct);
+                }
+                catch (TaskCanceledException) { break; }
+            }
+        }
+
+        private async Task TryFlushOnceAsync()
+        {
+            await _pendingLock.WaitAsync();
+            try
+            {
+                var list = await ReadPendingAsync();
+                if (list.Count == 0) return;
+
+                var succeeded = new List<Guid>();
+
+                foreach (var entry in list.ToList())
+                {
+                    bool ok = false;
+                    try
+                    {
+                        switch (entry.Type)
+                        {
+                            case PendingEntryType.SingleAnswer:
+                                if (entry.OpsiJawabanId.HasValue)
+                                {
+                                    ok = await _databaseService.SaveStudentAnswerAsync(entry.SoalId, entry.MahasiswaId, entry.OpsiJawabanId.Value);
+                                }
+                                break;
+                            case PendingEntryType.MultipleAnswers:
+                                if (entry.OpsiJawabanIds != null)
+                                {
+                                    ok = await _databaseService.SaveStudentAnswersAsync(entry.SoalId, entry.MahasiswaId, entry.OpsiJawabanIds);
+                                }
+                                break;
+                            case PendingEntryType.SubmitExam:
+                                ok = await _databaseService.EndExamSessionAsync(entry.UjianId, entry.MahasiswaId);
+                                break;
+                            case PendingEntryType.ForceStop:
+                                ok = await _databaseService.SaveForceStopExamAsync(entry.UjianId, entry.MahasiswaId);
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Flush entry failed: {ex.Message}");
+                        ok = false;
+                    }
+
+                    if (ok)
+                    {
+                        succeeded.Add(entry.Id);
+                    }
+                    else
+                    {
+                        // increment attempts and keep entry; remove if attempts grow too large
+                        entry.Attempts++;
+                        if (entry.Attempts >= 10)
+                        {
+                            succeeded.Add(entry.Id); // drop it
+                        }
+                    }
+                }
+
+                if (succeeded.Count > 0)
+                {
+                    var remaining = list.Where(x => !succeeded.Contains(x.Id)).ToList();
+                    var tmp = _pendingFilePath + ".tmp";
+                    var json = System.Text.Json.JsonSerializer.Serialize(remaining);
+                    await File.WriteAllTextAsync(tmp, json);
+                    File.Move(tmp, _pendingFilePath, true);
+
+                    // notify listeners
+                    PendingCountChanged?.Invoke(remaining.Count);
+                }
+                else
+                {
+                    // still notify to keep UI consistent
+                    PendingCountChanged?.Invoke(list.Count);
+                }
+            }
+            finally
+            {
+                _pendingLock.Release();
+            }
+        }
+
+        // Dispose cancellation token when object is garbage collected
+        ~ExamService()
+        {
+            try
+            {
+                _flushCts?.Cancel();
+            }
+            catch { }
+        }
     }
 }
 

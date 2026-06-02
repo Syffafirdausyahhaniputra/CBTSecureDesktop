@@ -129,6 +129,54 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
+        /// Deletes a single cache file for the given imageId if it exists.
+        /// Safe to call from any thread.
+        /// </summary>
+        public void DeleteCacheFile(string imageId)
+        {
+            try
+            {
+                string cleanImageId = SanitizeFileName(imageId);
+                string cacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.img");
+                if (File.Exists(cacheFilePath))
+                {
+                    File.Delete(cacheFilePath);
+                    System.Diagnostics.Debug.WriteLine($"Deleted cached image: {cacheFilePath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to delete cache file for {imageId}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Deletes multiple cache files asynchronously in background using parallelism for speed.
+        /// </summary>
+        public Task DeleteCacheFilesAsync(IEnumerable<string> imageIds)
+        {
+            return Task.Run(() =>
+            {
+                try
+                {
+                    var options = new System.Threading.Tasks.ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount)
+                    };
+
+                    Parallel.ForEach(imageIds, options, id =>
+                    {
+                        DeleteCacheFile(id);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error deleting cache files in parallel: {ex.Message}");
+                }
+            });
+        }
+
+        /// <summary>
         /// Converts a raw byte array into a WPF BitmapImage.
         /// </summary>
         private BitmapImage CreateBitmapImageFromBytes(byte[] imageData)

@@ -167,16 +167,66 @@ namespace CBTSecureDesktop.Data
                         Nilai = reader.IsDBNull("nilai_mahasiswa") ? null : reader.GetDouble("nilai_mahasiswa"),
                         ExtendTimeMinutes = reader.IsDBNull("extendtime") ? 0 : reader.GetInt32("extendtime")
                     };
-                    exams.Add(ujian);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Get exams error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetAvailableExamsForStudentAsync): {ex.Message}");
-            }
-            return exams;
-        }
+                            exams.Add(ujian);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Get exams error: {ex.Message}");
+                            System.Windows.MessageBox.Show($"DB Error (GetAvailableExamsForStudentAsync): {ex.Message}");
+                        }
+                        return exams;
+                    }
+
+                    /// <summary>
+                    /// Gets exam (t_ujian) record by ujian_id (global exam configuration)
+                    /// </summary>
+                    public async Task<Ujian?> GetExamByIdAsync(long ujianId)
+                    {
+                        try
+                        {
+                            using var connection = _dbConnection.GetConnection();
+                            await connection.OpenAsync();
+
+                            string query = @"SELECT ujian_id, matakuliah_id, tahun_ajaran_id, prodi_id, kode_ujian, nama_ujian, status, shufflesoal, starttime, endtime, created_at, updated_at, extendtime
+                                             FROM t_ujian
+                                             WHERE ujian_id = @ujianId
+                                             LIMIT 1";
+
+                            using var command = new MySqlCommand(query, connection);
+                            command.Parameters.AddWithValue("@ujianId", ujianId);
+
+                            using var reader = await command.ExecuteReaderAsync();
+                            if (await reader.ReadAsync())
+                            {
+                                var ujian = new Ujian
+                                {
+                                    UjianId = reader.GetInt64("ujian_id"),
+                                    MatakuliahId = reader.GetInt64("matakuliah_id"),
+                                    TahunAjaranId = reader.GetInt64("tahun_ajaran_id"),
+                                    ProdiId = reader.GetInt64("prodi_id"),
+                                    KodeUjian = reader.IsDBNull("kode_ujian") ? string.Empty : reader.GetString("kode_ujian"),
+                                    NamaUjian = reader.IsDBNull("nama_ujian") ? string.Empty : reader.GetString("nama_ujian"),
+                                    Status = reader.IsDBNull("status") ? "menunggu" : reader.GetString("status"),
+                                    ShuffleSoal = reader.IsDBNull("shufflesoal") ? 0 : reader.GetInt32("shufflesoal"),
+                                    StartTime = reader.IsDBNull("starttime") ? DateTime.MinValue : reader.GetDateTime("starttime"),
+                                    EndTime = reader.IsDBNull("endtime") ? DateTime.MinValue : reader.GetDateTime("endtime"),
+                                    CreatedAt = reader.IsDBNull("created_at") ? null : reader.GetDateTime("created_at"),
+                                    UpdatedAt = reader.IsDBNull("updated_at") ? null : reader.GetDateTime("updated_at"),
+                                    ExtendTimeMinutes = reader.IsDBNull("extendtime") ? 0 : reader.GetInt32("extendtime")
+                                };
+
+                                return ujian;
+                            }
+
+                            return null;
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Get exam by id error: {ex.Message}");
+                            return null;
+                        }
+                    }
 
         /// <summary>
         /// Gets all questions for a specific exam
