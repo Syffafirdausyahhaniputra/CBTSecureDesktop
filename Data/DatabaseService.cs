@@ -109,6 +109,60 @@ namespace CBTSecureDesktop.Data
             }
         }
 
+        /// <summary>
+        /// Changes a user's password after verifying their current password.
+        /// </summary>
+        public async Task<(bool Success, string Message)> ChangeUserPasswordAsync(long userId, string currentPassword, string newPassword)
+        {
+            if (userId <= 0)
+                return (false, "User tidak valid.");
+
+            if (string.IsNullOrWhiteSpace(currentPassword) || string.IsNullOrWhiteSpace(newPassword))
+                return (false, "Password saat ini dan password baru wajib diisi.");
+
+            if (newPassword.Length < 6)
+                return (false, "Password baru minimal 6 karakter.");
+
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                string selectQuery = @"SELECT password FROM t_user WHERE user_id = @userId LIMIT 1";
+                using var selectCommand = new MySqlCommand(selectQuery, connection);
+                selectCommand.Parameters.AddWithValue("@userId", userId);
+
+                var storedPassword = await selectCommand.ExecuteScalarAsync();
+                if (storedPassword == null)
+                    return (false, "User tidak ditemukan.");
+
+                var storedPasswordText = storedPassword.ToString() ?? string.Empty;
+                if (!VerifyPassword(currentPassword, storedPasswordText) && !string.Equals(currentPassword, storedPasswordText, StringComparison.Ordinal))
+                    return (false, "Password saat ini salah.");
+
+                string newPasswordHash = HashPassword(newPassword);
+
+                string updateQuery = @"UPDATE t_user 
+                                       SET password = @password, updated_at = NOW() 
+                                       WHERE user_id = @userId";
+                using var updateCommand = new MySqlCommand(updateQuery, connection);
+                updateCommand.Parameters.AddWithValue("@password", newPasswordHash);
+                updateCommand.Parameters.AddWithValue("@userId", userId);
+
+                int rowsAffected = await updateCommand.ExecuteNonQueryAsync();
+                if (rowsAffected > 0)
+                    return (true, "Password berhasil diperbarui.");
+
+                return (false, "Password gagal diperbarui.");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Change password error: {ex.Message}");
+                System.Windows.MessageBox.Show($"DB Error (ChangeUserPasswordAsync): {ex.Message}");
+                return (false, "Terjadi kesalahan saat mengubah password.");
+            }
+        }
+
         #endregion
 
         #region Exams
@@ -847,6 +901,14 @@ namespace CBTSecureDesktop.Data
         #endregion
 
         #region Helper Methods
+
+        /// <summary>
+        /// Hashes a password for secure storage.
+        /// </summary>
+        private string HashPassword(string password)
+        {
+            return BCrypt.Net.BCrypt.HashPassword(password);
+        }
 
         /// <summary>
         /// Verifies a password against a hash (for bcrypt hashed passwords)

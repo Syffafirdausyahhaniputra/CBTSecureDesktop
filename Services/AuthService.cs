@@ -80,6 +80,23 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
+        /// Changes the password for the currently authenticated user.
+        /// </summary>
+        public async Task<(bool Success, string Message)> ChangePasswordAsync(string currentPassword, string newPassword)
+        {
+            if (CurrentUser == null)
+                return (false, "User belum login.");
+
+            var result = await _databaseService.ChangeUserPasswordAsync(CurrentUser.UserId, currentPassword, newPassword);
+            if (result.Success)
+            {
+                CurrentUser.Password = newPassword;
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// Logs out the current user.
         /// </summary>
         public void Logout()

@@ -41,34 +41,78 @@
                               Margin="0,5,0,0"/>
                 </StackPanel>
 
-                <!-- User Info -->
-                <StackPanel Grid.Column="2" 
-                           Orientation="Horizontal"
-                           VerticalAlignment="Center">
-                    <Border Background="{StaticResource PolinemaWhite}"
-                           CornerRadius="25"
-                           Padding="20,10"
-                           Margin="0,0,15,0">
-                        <Border.Effect>
-                            <DropShadowEffect Color="#000000" Direction="270" ShadowDepth="0" Opacity="0.2" BlurRadius="8"/>
-                        </Border.Effect>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="👤" 
-                                      FontSize="18"
-                                      Margin="0,0,10,0"/>
-                            <TextBlock x:Name="StudentNameText"
-                                      Text="Mahasiswa"
-                                      FontSize="14"
-                                      FontWeight="SemiBold"
-                                      Foreground="{StaticResource PolinemaBluePrimary}"
-                                      VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <Button Content="Keluar"
-                           Style="{StaticResource PolinemaButtonSecondary}"
-                           Height="40"
-                           Padding="20,0"
-                           Click="LogoutButton_Click"/>
+                <!-- User Info with dropdown actions -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+
+                    <ToggleButton x:Name="UserToggleButton" 
+                  Width="220" 
+                  Height="50" 
+                  Cursor="Hand"
+                  HorizontalContentAlignment="Stretch"
+                  VerticalContentAlignment="Stretch">
+
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton">
+                                <Setter Property="Background" Value="{StaticResource PolinemaWhite}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource PolinemaBorderGray}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+
+                                <Style.Resources>
+                                    <Style TargetType="Border">
+                                        <Setter Property="CornerRadius" Value="8"/>
+                                    </Style>
+                                </Style.Resources>
+
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#F2F4F7"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource PolinemaBluePrimary}"/>
+                                    </Trigger>
+
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter Property="Background" Value="#E4E7EC"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource PolinemaBluePrimary}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ToggleButton.Style>
+
+                        <Grid Width="190" HorizontalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center" Foreground="{StaticResource PolinemaBluePrimary}" Margin="0,0,12,0"/>
+
+                            <TextBlock Grid.Column="1" x:Name="StudentNameText" Text="Mahasiswa" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource PolinemaBluePrimary}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+
+                            <TextBlock Grid.Column="2" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Foreground="{StaticResource PolinemaTextGray}"/>
+                        </Grid>
+                    </ToggleButton>
+
+                    <Popup IsOpen="{Binding IsChecked, ElementName=UserToggleButton}" PlacementTarget="{Binding ElementName=UserToggleButton}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade" VerticalOffset="4">
+                        <Border Background="{StaticResource PolinemaWhite}" CornerRadius="8" BorderBrush="{StaticResource PolinemaBorderGray}" BorderThickness="1" Width="220" Padding="6">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="15" Direction="270" ShadowDepth="3" Opacity="0.15" Color="Black"/>
+                            </Border.Effect>
+                            <StackPanel>
+                                <Button Style="{StaticResource PolinemaButtonSecondary}" Margin="0,0,0,4" Padding="12,8" HorizontalContentAlignment="Left" Click="ChangePasswordButton_Click">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE104;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center" Foreground="{StaticResource PolinemaBluePrimary}"/>
+                                        <TextBlock Text="Ubah Password" FontSize="14" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource PolinemaButtonDanger}" Padding="12,8" HorizontalContentAlignment="Left" Click="LogoutButton_Click">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Keluar" FontSize="14" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
                 </StackPanel>
             </Grid>
         </Border>

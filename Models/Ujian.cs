@@ -96,9 +96,11 @@ namespace CBTSecureDesktop.Models
             {
                 var now = DateTime.Now;
                 string statusGlobal = (Status ?? string.Empty).Trim().ToLower();
+                string statusMahasiswa = (StatusMahasiswa ?? string.Empty).Trim().ToLower();
 
-                // Munculkan persiapan ujian hanya sebelum ujian dimulai (atau terserah logic sebelum waktu habis/review).
-                if (statusGlobal == "selesai" || now > ActualEndTime)
+                // Hide preparation if the exam is globally finished/expired,
+                // or if the student has already finished/stopped their session.
+                if (statusGlobal == "selesai" || now > ActualEndTime || statusMahasiswa == "selesai" || statusMahasiswa == "dihentikan")
                     return System.Windows.Visibility.Collapsed;
 
                 return System.Windows.Visibility.Visible;

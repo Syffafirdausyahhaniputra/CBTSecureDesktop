@@ -38,6 +38,16 @@ namespace CBTSecureDesktop.UI
             await LoadExams();
         }
 
+        private void ChangePasswordButton_Click(object sender, RoutedEventArgs e)
+        {
+            var window = new ChangePasswordWindow(_authService)
+            {
+                Owner = this
+            };
+
+            window.ShowDialog();
+        }
+
         private void LogoutButton_Click(object sender, RoutedEventArgs e)
         {
             var result = MessageBox.Show(
