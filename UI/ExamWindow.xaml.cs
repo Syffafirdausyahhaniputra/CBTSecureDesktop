@@ -7,6 +7,7 @@ using System.Text;
 using System.Collections.Generic;
 using CBTSecureDesktop.Security;
 using CBTSecureDesktop.Services;
+using CBTSecureDesktop.Helpers;
 using ManagedNativeWifi;
 
 namespace CBTSecureDesktop.UI
@@ -314,7 +315,7 @@ namespace CBTSecureDesktop.UI
 
             // Update question display
             QuestionNumberText.Text = $"Pertanyaan {question.QuestionNumber}";
-            QuestionText.Text = question.QuestionText;
+            QuestionText.Text = HtmlHelper.ConvertToPlainText(question.QuestionText);
             QuestionCountText.Text = $"Soal {index + 1} dari {_questions.Count}";
 
             // Manage image display (Image caching logic moved to PreDownloadImagesAsync)
@@ -367,7 +368,7 @@ namespace CBTSecureDesktop.UI
 
                 var radioButton = new RadioButton
                 {
-                    Content = question.Options[currentIndex],
+                    Content = HtmlHelper.ConvertToPlainText(question.Options[currentIndex]),
                     Tag = currentIndex,
                     FontSize = 16,
                     Margin = new Thickness(0),
