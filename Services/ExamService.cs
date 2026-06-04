@@ -20,6 +20,7 @@ namespace CBTSecureDesktop.Services
         public string QuestionText { get; set; } = string.Empty;
         public List<string> Options { get; set; } = new();
         public List<long> OptionIds { get; set; } = new();
+        public List<string?> OptionFiles { get; set; } = new();
         public int? SelectedAnswer { get; set; }
         public List<int> SelectedAnswers { get; set; } = new();
         public bool IsMultiAnswer { get; set; } = false;
@@ -113,7 +114,7 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
-        /// Gets all image IDs for a specific exam to be pre-downloaded.
+        /// Gets all question image IDs for a specific exam to be pre-downloaded.
         /// </summary>
         public async Task<List<string>> GetAllImageIdsForExamAsync(long ujianId)
         {
@@ -126,24 +127,50 @@ namespace CBTSecureDesktop.Services
                 {
                     foreach (var img in soal.GambarSoal)
                     {
-                        if (!string.IsNullOrEmpty(img.File)) // Not really used inside ImageService since ImageService uses ImageId
-                        {
-                            // we just need the IDs for GetImageAsync
-                        }
                         string imgId = img.GambarSoalId.ToString();
-                        // Alternatively, if the ImageService takes a URL piece, but it takes imageId.
                         if (!imageIds.Contains(imgId))
                         {
                             imageIds.Add(imgId);
                         }
                     }
                 }
+
                 return imageIds;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get image IDs error: {ex.Message}");
                 return new List<string>();
+            }
+        }
+
+        /// <summary>
+        /// Gets all option image IDs for a specific exam to be pre-downloaded.
+        /// </summary>
+        public async Task<List<int>> GetAllOptionImageIdsForExamAsync(long ujianId)
+        {
+            try
+            {
+                var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
+                var optionImageIds = new List<int>();
+
+                foreach (var soal in soalList)
+                {
+                    foreach (var option in soal.OpsiJawaban)
+                    {
+                        if (!string.IsNullOrWhiteSpace(option.File) && option.OpsiJawabanId > 0 && !optionImageIds.Contains((int)option.OpsiJawabanId))
+                        {
+                            optionImageIds.Add((int)option.OpsiJawabanId);
+                        }
+                    }
+                }
+
+                return optionImageIds;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Get option image IDs error: {ex.Message}");
+                return new List<int>();
             }
         }
 
@@ -180,6 +207,7 @@ namespace CBTSecureDesktop.Services
                         QuestionText = soal.Pertanyaan,
                         Options = soal.OpsiJawaban.Select(o => o.Jawaban).ToList(),
                         OptionIds = soal.OpsiJawaban.Select(o => o.OpsiJawabanId).ToList(),
+                        OptionFiles = soal.OpsiJawaban.Select(o => o.File).ToList(),
                         IsMultiAnswer = isMulti,
                         Images = soal.GambarSoal.Select(g => g.GambarSoalId.ToString()).ToList()
                     };

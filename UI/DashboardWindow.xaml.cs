@@ -121,18 +121,20 @@ namespace CBTSecureDesktop.UI
                 await Task.Delay(delayMs);
 
                 DownloadProgressBar.IsIndeterminate = false;
-                DownloadProgressText.Text = "Menghubungkan ke server untuk mengambil daftar gambar...";
+                DownloadProgressText.Text = "Menghubungkan ke server untuk mengambil daftar gambar soal dan opsi...";
 
-                var imageIds = await _examService.GetAllImageIdsForExamAsync(ujianId);
-                int totalImages = imageIds.Count;
+                var questionImageIds = await _examService.GetAllImageIdsForExamAsync(ujianId);
+                var optionImageIds = await _examService.GetAllOptionImageIdsForExamAsync(ujianId);
+                int totalImages = questionImageIds.Count + optionImageIds.Count;
 
                 if (totalImages == 0)
                 {
                     MessageBox.Show(
-                        "Tidak ada gambar yang perlu diunduh untuk ujian ini.",
+                        "Tidak ada gambar soal maupun gambar opsi yang perlu diunduh untuk ujian ini.",
                         "Informasi",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
+                    _preparedExamIds.Add(ujianId);
                     return;
                 }
 
@@ -140,16 +142,28 @@ namespace CBTSecureDesktop.UI
                 DownloadProgressBar.Value = 0;
                 int downloaded = 0;
 
-                foreach (var imageId in imageIds)
+                foreach (var imageId in questionImageIds)
                 {
                     downloaded++;
                     Dispatcher.Invoke(() =>
                     {
                         DownloadProgressBar.Value = downloaded;
-                        DownloadProgressText.Text = $"Mengunduh berkas gambar soal: {downloaded} dari {totalImages}...";
+                        DownloadProgressText.Text = $"Mengunduh gambar soal: {downloaded} dari {totalImages}...";
                     });
 
                     await _imageService.GetImageAsync(imageId, "abc123");
+                }
+
+                foreach (var optionId in optionImageIds)
+                {
+                    downloaded++;
+                    Dispatcher.Invoke(() =>
+                    {
+                        DownloadProgressBar.Value = downloaded;
+                        DownloadProgressText.Text = $"Mengunduh gambar opsi: {downloaded} dari {totalImages}...";
+                    });
+
+                    await _imageService.GetOptionImageAsync(optionId, "abc123");
                 }
 
                 var failures = ImageService.ConsumeDownloadFailures();
@@ -160,7 +174,7 @@ namespace CBTSecureDesktop.UI
                 else
                 {
                     MessageBox.Show(
-                        "Persiapan ujian selesai. Semua gambar telah berhasil diunduh.",
+                        "Persiapan ujian selesai. Semua gambar soal dan opsi telah berhasil diunduh.",
                         "Persiapan Selesai",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);

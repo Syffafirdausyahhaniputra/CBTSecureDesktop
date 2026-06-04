@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.Linq;
@@ -32,6 +33,10 @@ namespace CBTSecureDesktop.UI
 
         // Image Service
         private readonly ImageService _imageService = new ImageService();
+        private const double MinImageZoom = 0.5;
+        private const double MaxImageZoom = 3.0;
+        private const double ImageZoomStep = 0.1;
+        private double _currentImageZoom = 1.0;
 
         // Cached values to compute remaining time efficiently
         private DateTime? _examGlobalEndTime = null;
@@ -312,6 +317,7 @@ namespace CBTSecureDesktop.UI
 
             _currentQuestionIndex = index;
             var question = _questions[index];
+            _currentImageZoom = 1.0;
 
             // Update question display
             QuestionNumberText.Text = $"Pertanyaan {question.QuestionNumber}";
@@ -323,22 +329,29 @@ namespace CBTSecureDesktop.UI
             {
                 try
                 {
+                    SetImageSectionVisibility(Visibility.Visible);
                     QuestionImage.Visibility = Visibility.Visible;
-                    
+
                     // The image might be locally cached already via PreDownloadImagesAsync. 
                     // To prevent UI blocking repeatedly, we still use GetImageAsync which loads from Cache.
                     var bitmap = await _imageService.GetImageAsync(question.Images[0], "abc123");
                     QuestionImage.Source = bitmap;
+                    ApplyImageZoom();
                 }
                 catch
                 {
+                    SetImageSectionVisibility(Visibility.Collapsed);
                     QuestionImage.Visibility = Visibility.Collapsed;
+                    QuestionImage.Source = null;
+                    ApplyImageZoom();
                 }
             }
             else
             {
+                SetImageSectionVisibility(Visibility.Collapsed);
                 QuestionImage.Visibility = Visibility.Collapsed;
                 QuestionImage.Source = null;
+                ApplyImageZoom();
             }
 
             // Update progress
@@ -366,15 +379,18 @@ namespace CBTSecureDesktop.UI
                 System.Windows.Controls.Primitives.ToggleButton inputControl;
                 int currentIndex = i;
 
+                var optionText = HtmlHelper.ConvertToPlainText(question.Options[currentIndex]);
+                var optionFile = currentIndex < question.OptionFiles.Count ? question.OptionFiles[currentIndex] : null;
+
                 var radioButton = new RadioButton
                 {
-                    Content = HtmlHelper.ConvertToPlainText(question.Options[currentIndex]),
                     Tag = currentIndex,
                     FontSize = 16,
                     Margin = new Thickness(0),
                     Padding = new Thickness(15),
                     Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)), // PolinemaDarkGray
-                    FontWeight = FontWeights.Medium
+                    FontWeight = FontWeights.Medium,
+                    Content = await BuildOptionContentAsync(optionText, optionFile, question.OptionIds[currentIndex])
                 };
 
                 if (question.IsMultiAnswer)
@@ -516,6 +532,57 @@ namespace CBTSecureDesktop.UI
             }
         }
 
+        private async Task<object> BuildOptionContentAsync(string optionText, string? optionFile, long optionId)
+        {
+            if (optionId > 0 && !string.IsNullOrWhiteSpace(optionFile))
+            {
+                try
+                {
+                    var optionImage = await _imageService.GetOptionImageAsync((int)optionId, "abc123");
+                    var image = new Image
+                    {
+                        Source = optionImage,
+                        Stretch = Stretch.Uniform,
+                        MaxHeight = 180,
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(0, 0, 0, 8)
+                    };
+
+                    if (string.IsNullOrWhiteSpace(optionText))
+                    {
+                        return image;
+                    }
+
+                    return new StackPanel
+                    {
+                        Children =
+                        {
+                            image,
+                            new TextBlock
+                            {
+                                Text = optionText,
+                                TextWrapping = TextWrapping.Wrap,
+                                Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)),
+                                FontSize = 16
+                            }
+                        }
+                    };
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to load option image {optionId}: {ex.Message}");
+                }
+            }
+
+            return new TextBlock
+            {
+                Text = optionText,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)),
+                FontSize = 16
+            };
+        }
+
         private async void UpdateProgressAndSaveMulti()
         {
             int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue || (q.IsMultiAnswer && q.SelectedAnswers.Count > 0));
@@ -558,17 +625,65 @@ namespace CBTSecureDesktop.UI
                     try
                     {
                         var bitmap = await _imageService.RefreshImageCacheAsync(question.Images[0], "abc123");
+                        SetImageSectionVisibility(Visibility.Visible);
                         QuestionImage.Source = bitmap;
                         QuestionImage.Visibility = Visibility.Visible;
+                        ApplyImageZoom();
                     }
                     catch
                     {
+                        SetImageSectionVisibility(Visibility.Collapsed);
                         QuestionImage.Visibility = Visibility.Collapsed;
                     }
                 }
 
                 btn.Content = "🔄 Refresh Gambar";
                 btn.IsEnabled = true;
+            }
+        }
+
+        private void ZoomOutImageButton_Click(object sender, RoutedEventArgs e)
+        {
+            _currentImageZoom = Math.Max(MinImageZoom, _currentImageZoom - ImageZoomStep);
+            ApplyImageZoom();
+        }
+
+        private void ZoomInImageButton_Click(object sender, RoutedEventArgs e)
+        {
+            _currentImageZoom = Math.Min(MaxImageZoom, _currentImageZoom + ImageZoomStep);
+            ApplyImageZoom();
+        }
+
+        private void ResetZoomImageButton_Click(object sender, RoutedEventArgs e)
+        {
+            _currentImageZoom = 1.0;
+            ApplyImageZoom();
+        }
+
+        private void QuestionImage_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (QuestionImage.Visibility != Visibility.Visible)
+            {
+                return;
+            }
+
+            _currentImageZoom = e.Delta > 0
+                ? Math.Min(MaxImageZoom, _currentImageZoom + ImageZoomStep)
+                : Math.Max(MinImageZoom, _currentImageZoom - ImageZoomStep);
+
+            ApplyImageZoom();
+        }
+
+        private void ApplyImageZoom()
+        {
+            QuestionImage.LayoutTransform = new ScaleTransform(_currentImageZoom, _currentImageZoom);
+        }
+
+        private void SetImageSectionVisibility(Visibility visibility)
+        {
+            if (FindName("ImageSection") is FrameworkElement imageSection)
+            {
+                imageSection.Visibility = visibility;
             }
         }
 
@@ -596,8 +711,8 @@ namespace CBTSecureDesktop.UI
                 var btn = new Button
                 {
                     Content = (i + 1).ToString(),
-                    Width = 45,
-                    Height = 45,
+                    Width = 40,
+                    Height = 40,
                     Margin = new Thickness(5),
                     Tag = i,
                     Cursor = System.Windows.Input.Cursors.Hand,

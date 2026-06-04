@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Specialized;
 using System.IO;
 using System.Net.Http;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 
@@ -11,6 +13,7 @@ namespace CBTSecureDesktop.Services
     {
         private static readonly HttpClient _httpClient = new HttpClient();
         private readonly string _cacheDirectory;
+        private readonly string _optionCacheDirectory;
         private readonly string _baseUrl;
         private static readonly ConcurrentQueue<string> _downloadFailures = new();
 
@@ -21,42 +24,51 @@ namespace CBTSecureDesktop.Services
 
         public ImageService(string baseUrl = "http://127.0.0.1:8000/api/image/")
         {
-            _baseUrl = baseUrl;
+            _baseUrl = baseUrl.EndsWith("/") ? baseUrl : baseUrl + "/";
 
             // Set up local cache directory in AppData
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            _cacheDirectory = Path.Combine(appDataPath, "CBTSecureDesktop", "ImageCache");
+            var cacheRoot = Path.Combine(appDataPath, "CBTSecureDesktop", "ImageCache");
+            _cacheDirectory = cacheRoot;
+            _optionCacheDirectory = Path.Combine(cacheRoot, "Options");
 
-            if (!Directory.Exists(_cacheDirectory))
-            {
-                Directory.CreateDirectory(_cacheDirectory);
-            }
+            Directory.CreateDirectory(_cacheDirectory);
+            Directory.CreateDirectory(_optionCacheDirectory);
         }
 
         /// <summary>
-        /// Retrieves an image from cache or downloads it from the API if not cached.
+        /// Retrieves a question image from cache or downloads it from the API if not cached.
         /// </summary>
         public async Task<BitmapImage> GetImageAsync(string imageId, string token = "")
         {
-            string cleanImageId = SanitizeFileName(imageId);
-            string cacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.img");
-
-            // 1. Check Local Cache first
-            if (File.Exists(cacheFilePath))
+            if (string.IsNullOrWhiteSpace(imageId))
             {
-                try
-                {
-                    byte[] cachedBytes = await File.ReadAllBytesAsync(cacheFilePath);
-                    return CreateBitmapImageFromBytes(cachedBytes);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Failed to load image from cache: {ex.Message}");
-                    // Fall through to try downloading again
-                }
+                return GetDefaultPlaceholderImage();
             }
 
-            return await DownloadImageAndCacheAsync(imageId, token, cacheFilePath);
+            string cleanImageId = SanitizeFileName(imageId);
+            string cacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.img");
+            string resolvedToken = ResolveToken(token);
+            string requestUrl = BuildRequestUrl($"{_baseUrl}{cleanImageId}", resolvedToken);
+
+            return await GetOrDownloadImageAsync(cacheFilePath, requestUrl, cleanImageId);
+        }
+
+        /// <summary>
+        /// Retrieves an option image from cache or downloads it from the API if not cached.
+        /// </summary>
+        public async Task<BitmapImage> GetOptionImageAsync(int optionId, string token = "")
+        {
+            if (optionId <= 0)
+            {
+                return GetDefaultPlaceholderImage();
+            }
+
+            string cacheFilePath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
+            string resolvedToken = ResolveToken(token);
+            string requestUrl = BuildRequestUrl($"{_baseUrl}option/{optionId}", resolvedToken);
+
+            return await GetOrDownloadImageAsync(cacheFilePath, requestUrl, optionId.ToString());
         }
 
         public static string[] ConsumeDownloadFailures()
@@ -70,26 +82,38 @@ namespace CBTSecureDesktop.Services
             return failures.ToArray();
         }
 
-        private async Task<BitmapImage> DownloadImageAndCacheAsync(string imageId, string token, string cacheFilePath)
+        private async Task<BitmapImage> GetOrDownloadImageAsync(string cacheFilePath, string requestUrl, string imageId)
+        {
+            if (File.Exists(cacheFilePath))
+            {
+                try
+                {
+                    byte[] cachedBytes = await File.ReadAllBytesAsync(cacheFilePath);
+                    return CreateBitmapImageFromBytes(cachedBytes);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to load image from cache: {ex.Message}");
+                }
+            }
+
+            return await DownloadImageAndCacheAsync(requestUrl, cacheFilePath, imageId);
+        }
+
+        private async Task<BitmapImage> DownloadImageAndCacheAsync(string requestUrl, string cacheFilePath, string imageId)
         {
             try
             {
-                string requestUrl = $"{_baseUrl}{imageId}";
-                if (!string.IsNullOrEmpty(token))
-                {
-                    requestUrl += $"?token={token}";
-                }
-
                 HttpResponseMessage response = await _httpClient.GetAsync(requestUrl);
 
                 if (response.IsSuccessStatusCode)
                 {
                     byte[] imageBytes = await response.Content.ReadAsByteArrayAsync();
-                    _ = SaveToCacheAsync(cacheFilePath, imageBytes);
+                    await SaveToCacheAsync(cacheFilePath, imageBytes);
                     return CreateBitmapImageFromBytes(imageBytes);
                 }
 
-                string errorMessage = $"{imageId} - Status {response.StatusCode}";
+                string errorMessage = $"{imageId} - Status {(int)response.StatusCode} ({response.ReasonPhrase})";
                 System.Diagnostics.Debug.WriteLine($"Gagal mendownload gambar: {errorMessage}");
                 EnqueueDownloadFailure(imageId, errorMessage);
                 return GetDefaultPlaceholderImage();
@@ -105,6 +129,11 @@ namespace CBTSecureDesktop.Services
 
         public async Task<BitmapImage> RefreshImageCacheAsync(string imageId, string token = "")
         {
+            if (string.IsNullOrWhiteSpace(imageId))
+            {
+                return GetDefaultPlaceholderImage();
+            }
+
             string cleanImageId = SanitizeFileName(imageId);
             string cacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.img");
 
@@ -120,7 +149,38 @@ namespace CBTSecureDesktop.Services
                 }
             }
 
-            return await DownloadImageAndCacheAsync(imageId, token, cacheFilePath);
+            string resolvedToken = ResolveToken(token);
+            string requestUrl = BuildRequestUrl($"{_baseUrl}{cleanImageId}", resolvedToken);
+            return await DownloadImageAndCacheAsync(requestUrl, cacheFilePath, cleanImageId);
+        }
+
+        /// <summary>
+        /// Refreshes a cached option image by forcing a re-download from the option image endpoint.
+        /// </summary>
+        public async Task<BitmapImage> RefreshOptionImageCacheAsync(int optionId, string token = "")
+        {
+            if (optionId <= 0)
+            {
+                return GetDefaultPlaceholderImage();
+            }
+
+            string cacheFilePath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
+
+            if (File.Exists(cacheFilePath))
+            {
+                try
+                {
+                    File.Delete(cacheFilePath);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to delete option cache: {ex.Message}");
+                }
+            }
+
+            string resolvedToken = ResolveToken(token);
+            string requestUrl = BuildRequestUrl($"{_baseUrl}option/{optionId}", resolvedToken);
+            return await DownloadImageAndCacheAsync(requestUrl, cacheFilePath, optionId.ToString());
         }
 
         private static void EnqueueDownloadFailure(string imageId, string detail)
@@ -208,6 +268,12 @@ namespace CBTSecureDesktop.Services
         {
             try
             {
+                var directory = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
                 await File.WriteAllBytesAsync(filePath, data);
             }
             catch (Exception ex)
@@ -231,6 +297,51 @@ namespace CBTSecureDesktop.Services
                 // Absolute fallback returning an empty image if somehow pack url fails
                 return new BitmapImage(); 
             }
+        }
+
+        private static string ResolveToken(string token)
+        {
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                return token;
+            }
+
+            var envToken = Environment.GetEnvironmentVariable("IMAGE_API_TOKEN");
+            if (!string.IsNullOrWhiteSpace(envToken))
+            {
+                return envToken;
+            }
+
+            return ReadAppSetting("IMAGE_API_TOKEN") ?? string.Empty;
+        }
+
+        private static string? ReadAppSetting(string key)
+        {
+            try
+            {
+                var configType = Type.GetType("System.Configuration.ConfigurationManager, System.Configuration.ConfigurationManager");
+                var appSettingsProperty = configType?.GetProperty("AppSettings", BindingFlags.Public | BindingFlags.Static);
+                if (appSettingsProperty?.GetValue(null) is NameValueCollection appSettings)
+                {
+                    return appSettings[key];
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to read app setting '{key}': {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private static string BuildRequestUrl(string baseRequestUrl, string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return baseRequestUrl;
+            }
+
+            return $"{baseRequestUrl}?token={Uri.EscapeDataString(token)}";
         }
 
         private string SanitizeFileName(string fileName)
