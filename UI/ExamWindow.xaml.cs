@@ -734,58 +734,110 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private async void RefreshExamButton_Click(object sender, RoutedEventArgs e)
+        private Dictionary<long, List<long>> CaptureAnswerStateBySoalId()
         {
-            if (RefreshExamButton.IsEnabled)
+            var answerState = new Dictionary<long, List<long>>();
+
+            foreach (var question in _questions)
             {
-                RefreshExamButton.IsEnabled = false;
-                RefreshExamButton.Content = "Menyegarkan...";
-
-                try
+                if (question.IsMultiAnswer)
                 {
-                    // Remember current answers state
-                    var currentAnswers = _questions.Select(q => q.SelectedAnswer).ToArray();
-                    var currentMultiAnswers = _questions.Select(q => q.SelectedAnswers.ToList()).ToArray();
-                    int lastIndex = _currentQuestionIndex;
+                    var selectedOptionIds = question.SelectedAnswers
+                        .Where(i => i >= 0 && i < question.OptionIds.Count)
+                        .Select(i => question.OptionIds[i])
+                        .Distinct()
+                        .ToList();
 
-                    // Reload questions
-                    _questions = await _examService.LoadExamQuestionsAsync(_ujianId, _mahasiswaId);
-
-                    if (_questions.Count > 0)
+                    if (selectedOptionIds.Count > 0)
                     {
-                        // Safely reapply local transient state if db miss
-                        for(int i = 0; i < currentAnswers.Length && i < _questions.Count; i++)
-                        {
-                            if (!_questions[i].IsMultiAnswer)
-                            {
-                                if (!_questions[i].SelectedAnswer.HasValue && currentAnswers[i].HasValue)
-                                {
-                                    _questions[i].SelectedAnswer = currentAnswers[i];
-                                }
-                            }
-                            else
-                            {
-                                if (_questions[i].SelectedAnswers.Count == 0 && currentMultiAnswers[i].Count > 0)
-                                {
-                                    _questions[i].SelectedAnswers = currentMultiAnswers[i];
-                                }
-                            }
-                        }
-
-                        // Rebind UI
-                        GenerateNavPanelButtons();
-                        DisplayQuestion(lastIndex < _questions.Count ? lastIndex : 0);
+                        answerState[question.SoalId] = selectedOptionIds;
                     }
                 }
-                catch
+                else if (question.SelectedAnswer.HasValue && question.SelectedAnswer.Value >= 0 && question.SelectedAnswer.Value < question.OptionIds.Count)
                 {
-                    MessageBox.Show("Gagal menyegarkan soal. Pastikan koneksi internet Anda stabil.", "Kesalahan Jaringan", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    answerState[question.SoalId] = new List<long> { question.OptionIds[question.SelectedAnswer.Value] };
+                }
+            }
+
+            return answerState;
+        }
+
+        private static void RestoreAnswerStateBySoalId(Dictionary<long, List<long>> answerState, List<ExamQuestion> refreshedQuestions)
+        {
+            foreach (var question in refreshedQuestions)
+            {
+                question.SelectedAnswer = null;
+                question.SelectedAnswers.Clear();
+
+                if (!answerState.TryGetValue(question.SoalId, out var selectedOptionIds) || selectedOptionIds.Count == 0)
+                {
+                    continue;
                 }
 
-                // Temporary block (10s) to prevent spamming server
+                var selectedIndices = selectedOptionIds
+                    .Select(id => question.OptionIds.IndexOf(id))
+                    .Where(index => index >= 0)
+                    .Distinct()
+                    .ToList();
+
+                if (question.IsMultiAnswer)
+                {
+                    question.SelectedAnswers.AddRange(selectedIndices);
+                }
+                else if (selectedIndices.Count > 0)
+                {
+                    question.SelectedAnswer = selectedIndices[0];
+                }
+            }
+        }
+
+        private async void RefreshExamButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!RefreshExamButton.IsEnabled)
+            {
+                return;
+            }
+
+            RefreshExamButton.IsEnabled = false;
+            RefreshExamButton.Content = "Menyegarkan...";
+
+            try
+            {
+                var localAnswerState = CaptureAnswerStateBySoalId();
+                long? currentSoalId = _questions.Count > 0 && _currentQuestionIndex >= 0 && _currentQuestionIndex < _questions.Count
+                    ? _questions[_currentQuestionIndex].SoalId
+                    : null;
+
+                var refreshedQuestions = await _examService.GetExamQuestionsAsync(_ujianId);
+
+                if (refreshedQuestions.Count > 0)
+                {
+                    RestoreAnswerStateBySoalId(localAnswerState, refreshedQuestions);
+                    _questions = refreshedQuestions;
+
+                    int targetIndex = 0;
+                    if (currentSoalId.HasValue)
+                    {
+                        int sameQuestionIndex = _questions.FindIndex(q => q.SoalId == currentSoalId.Value);
+                        if (sameQuestionIndex >= 0)
+                        {
+                            targetIndex = sameQuestionIndex;
+                        }
+                    }
+
+                    GenerateNavPanelButtons();
+                    DisplayQuestion(targetIndex);
+                }
+            }
+            catch
+            {
+                MessageBox.Show("Gagal menyegarkan soal. Pastikan koneksi internet Anda stabil.", "Kesalahan Jaringan", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
                 await Task.Delay(10000);
 
-                if (RefreshExamButton != null) // Avoid crash if closed
+                if (RefreshExamButton != null)
                 {
                     RefreshExamButton.IsEnabled = true;
                     RefreshExamButton.Content = "🔄 Segarkan Soal";

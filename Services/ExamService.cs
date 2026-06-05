@@ -184,61 +184,15 @@ namespace CBTSecureDesktop.Services
                 _currentUjianId = ujianId;
                 _currentMahasiswaId = mahasiswaId;
 
-                // Start exam session
+                // Start exam session once when exam window is opened
                 _currentExamSessionId = await _databaseService.StartExamSessionAsync(ujianId, mahasiswaId);
 
-                // Get questions from database
+                // Get latest questions from database and apply deterministic shuffle
                 var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
+                _currentExamQuestions = await BuildDeterministicExamQuestionsAsync(soalList, ujianId, mahasiswaId);
 
-                // Prepare blank answers rows for this student to ensure they are recorded in database in the correct display sequence
-                await _databaseService.InitializeStudentAnswersAsync(ujianId, mahasiswaId, soalList.Select(s => s.SoalId).ToList());
-
-                // Convert to ExamQuestion view model
-                _currentExamQuestions = new List<ExamQuestion>();
-                int questionNumber = 1;
-
-                foreach (var soal in soalList)
-                {
-                    bool isMulti = soal.OpsiJawaban.Count(o => o.Nilai == 1) > 1;
-                    var examQuestion = new ExamQuestion
-                    {
-                        SoalId = soal.SoalId,
-                        QuestionNumber = questionNumber++,
-                        QuestionText = soal.Pertanyaan,
-                        Options = soal.OpsiJawaban.Select(o => o.Jawaban).ToList(),
-                        OptionIds = soal.OpsiJawaban.Select(o => o.OpsiJawabanId).ToList(),
-                        OptionFiles = soal.OpsiJawaban.Select(o => o.File).ToList(),
-                        IsMultiAnswer = isMulti,
-                        Images = soal.GambarSoal.Select(g => g.GambarSoalId.ToString()).ToList()
-                    };
-                    _currentExamQuestions.Add(examQuestion);
-                }
-
-                // Load existing answers if any
-                var existingAnswers = await _databaseService.GetStudentAnswersAsync(ujianId, mahasiswaId);
-                foreach (var answer in existingAnswers)
-                {
-                    if (answer.OpsiJawabanId.HasValue)
-                    {
-                        var question = _currentExamQuestions.FirstOrDefault(q => q.SoalId == answer.SoalId);
-                        if (question != null)
-                        {
-                            int optionIndex = question.OptionIds.IndexOf(answer.OpsiJawabanId.Value);
-                            if (optionIndex >= 0)
-                            {
-                                if (question.IsMultiAnswer)
-                                {
-                                    if (!question.SelectedAnswers.Contains(optionIndex))
-                                        question.SelectedAnswers.Add(optionIndex);
-                                }
-                                else
-                                {
-                                    question.SelectedAnswer = optionIndex;
-                                }
-                            }
-                        }
-                    }
-                }
+                // Prepare blank answers rows in deterministic display sequence
+                await _databaseService.InitializeStudentAnswersAsync(ujianId, mahasiswaId, _currentExamQuestions.Select(q => q.SoalId).ToList());
 
                 return _currentExamQuestions;
             }
@@ -248,6 +202,97 @@ namespace CBTSecureDesktop.Services
                 System.Windows.MessageBox.Show($"Service Error (LoadExamQuestionsAsync): {ex.Message}");
                 return new List<ExamQuestion>();
             }
+        }
+
+        /// <summary>
+        /// Refreshes latest exam questions content from database while preserving deterministic display order.
+        /// </summary>
+        public async Task<List<ExamQuestion>> GetExamQuestionsAsync(long ujianId)
+        {
+            try
+            {
+                if (_currentMahasiswaId <= 0)
+                {
+                    return new List<ExamQuestion>();
+                }
+
+                _currentUjianId = ujianId;
+
+                var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
+                _currentExamQuestions = await BuildDeterministicExamQuestionsAsync(soalList, ujianId, _currentMahasiswaId);
+
+                return _currentExamQuestions;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Get exam questions error: {ex.Message}");
+                return new List<ExamQuestion>();
+            }
+        }
+
+        private async Task<List<ExamQuestion>> BuildDeterministicExamQuestionsAsync(List<Soal> soalList, long ujianId, long mahasiswaId)
+        {
+            // Normalize source order first so deterministic seed always generates the same question sequence.
+            var normalizedQuestions = soalList.OrderBy(s => s.SoalId).ToList();
+
+            var examQuestions = normalizedQuestions.Select(soal =>
+            {
+                bool isMulti = soal.OpsiJawaban.Count(o => o.Nilai == 1) > 1;
+                return new ExamQuestion
+                {
+                    SoalId = soal.SoalId,
+                    QuestionText = soal.Pertanyaan,
+                    Options = soal.OpsiJawaban.Select(o => o.Jawaban).ToList(),
+                    OptionIds = soal.OpsiJawaban.Select(o => o.OpsiJawabanId).ToList(),
+                    OptionFiles = soal.OpsiJawaban.Select(o => o.File).ToList(),
+                    IsMultiAnswer = isMulti,
+                    Images = soal.GambarSoal.Select(g => g.GambarSoalId.ToString()).ToList()
+                };
+            }).ToList();
+
+            int deterministicSeed = unchecked((int)((ujianId * 100000) + mahasiswaId));
+            var rnd = new Random(deterministicSeed);
+            examQuestions = examQuestions.OrderBy(q => rnd.Next()).ToList();
+
+            for (int i = 0; i < examQuestions.Count; i++)
+            {
+                examQuestions[i].QuestionNumber = i + 1;
+            }
+
+            var existingAnswers = await _databaseService.GetStudentAnswersAsync(ujianId, mahasiswaId);
+            foreach (var answer in existingAnswers)
+            {
+                if (!answer.OpsiJawabanId.HasValue)
+                {
+                    continue;
+                }
+
+                var question = examQuestions.FirstOrDefault(q => q.SoalId == answer.SoalId);
+                if (question == null)
+                {
+                    continue;
+                }
+
+                int optionIndex = question.OptionIds.IndexOf(answer.OpsiJawabanId.Value);
+                if (optionIndex < 0)
+                {
+                    continue;
+                }
+
+                if (question.IsMultiAnswer)
+                {
+                    if (!question.SelectedAnswers.Contains(optionIndex))
+                    {
+                        question.SelectedAnswers.Add(optionIndex);
+                    }
+                }
+                else
+                {
+                    question.SelectedAnswer = optionIndex;
+                }
+            }
+
+            return examQuestions;
         }
 
         /// <summary>
