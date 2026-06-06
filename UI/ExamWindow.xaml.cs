@@ -6,6 +6,8 @@ using System.Windows.Threading;
 using System.Linq;
 using System.Text;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 using CBTSecureDesktop.Security;
 using CBTSecureDesktop.Services;
 using CBTSecureDesktop.Helpers;
@@ -1104,8 +1106,18 @@ namespace CBTSecureDesktop.UI
                 Text = "Lakukan pemindaian ulang jika daftar jaringan belum muncul atau masih menampilkan jaringan lama.",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
-                Margin = new Thickness(0, 0, 0, 14)
+                Margin = new Thickness(0, 0, 0, 10)
             });
+
+            var connectedWifiText = new TextBlock
+            {
+                Text = "Wi-Fi terhubung saat ini: mendeteksi...",
+                TextWrapping = TextWrapping.Wrap,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(30, 58, 138)),
+                Margin = new Thickness(0, 0, 0, 14)
+            };
+            root.Children.Add(connectedWifiText);
 
             var scanButton = new Button
             {
@@ -1169,10 +1181,26 @@ namespace CBTSecureDesktop.UI
 
             var networksTemp = new List<WifiNetworkOption>();
 
+            async Task RefreshConnectedWifiInfoAsync()
+            {
+                var connectedSsid = await GetConnectedWifiSsidAsync();
+                if (string.IsNullOrWhiteSpace(connectedSsid))
+                {
+                    connectedWifiText.Text = "Wi-Fi terhubung saat ini: tidak ada";
+                    connectedWifiText.Foreground = new SolidColorBrush(Color.FromRgb(180, 83, 9));
+                }
+                else
+                {
+                    connectedWifiText.Text = $"Wi-Fi terhubung saat ini: {connectedSsid}";
+                    connectedWifiText.Foreground = new SolidColorBrush(Color.FromRgb(22, 101, 52));
+                }
+            }
+
             async Task RefreshNetworksAsync()
             {
                 try
                 {
+                    await RefreshConnectedWifiInfoAsync();
                     statusText.Text = "Status: memindai jaringan...";
                     scanButton.IsEnabled = false;
                     connectButton.IsEnabled = false;
@@ -1261,32 +1289,33 @@ namespace CBTSecureDesktop.UI
 
                     string profileXml = string.IsNullOrWhiteSpace(passwordBox.Password)
                         ? $@"<?xml version=""1.0""?>
-<WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
-    <name>{selectedNetwork.Ssid}</name>
-    <SSIDConfig><SSID><name>{selectedNetwork.Ssid}</name></SSID></SSIDConfig>
-    <connectionType>ESS</connectionType>
-    <connectionMode>manual</connectionMode>
-    <MSM><security><authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption></security></MSM>
-</WLANProfile>"
-                        : $@"<?xml version=""1.0""?>
-<WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
-    <name>{selectedNetwork.Ssid}</name>
-    <SSIDConfig><SSID><name>{selectedNetwork.Ssid}</name></SSID></SSIDConfig>
-    <connectionType>ESS</connectionType>
-    <connectionMode>manual</connectionMode>
-    <MSM>
-        <security>
-            <authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>
-            <sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{passwordBox.Password}</keyMaterial></sharedKey>
-        </security>
-    </MSM>
-</WLANProfile>";
+                        <WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
+                            <name>{selectedNetwork.Ssid}</name>
+                            <SSIDConfig><SSID><name>{selectedNetwork.Ssid}</name></SSID></SSIDConfig>
+                            <connectionType>ESS</connectionType>
+                            <connectionMode>manual</connectionMode>
+                            <MSM><security><authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption></security></MSM>
+                        </WLANProfile>"
+                                                : $@"<?xml version=""1.0""?>
+                        <WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
+                            <name>{selectedNetwork.Ssid}</name>
+                            <SSIDConfig><SSID><name>{selectedNetwork.Ssid}</name></SSID></SSIDConfig>
+                            <connectionType>ESS</connectionType>
+                            <connectionMode>manual</connectionMode>
+                            <MSM>
+                                <security>
+                                    <authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>
+                                    <sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{passwordBox.Password}</keyMaterial></sharedKey>
+                                </security>
+                            </MSM>
+                        </WLANProfile>";
 
                     NativeWifi.SetProfile(selectedNetwork.InterfaceId, ProfileType.AllUser, profileXml, null, true);
                     var isConnected = await NativeWifi.ConnectNetworkAsync(selectedNetwork.InterfaceId, selectedNetwork.Ssid, selectedNetwork.BssType, TimeSpan.FromSeconds(20));
 
                     if (isConnected)
                     {
+                        await RefreshConnectedWifiInfoAsync();
                         MessageBox.Show($"Berhasil terhubung ke {selectedNetwork.Ssid}.", "Wi-Fi", MessageBoxButton.OK, MessageBoxImage.Information);
                         dialog.Close();
                     }
@@ -1311,6 +1340,59 @@ namespace CBTSecureDesktop.UI
             dialog.Content = root;
             await RefreshNetworksAsync();
             dialog.ShowDialog();
+        }
+
+        private async Task<string?> GetConnectedWifiSsidAsync()
+        {
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "netsh",
+                        Arguments = "wlan show interfaces",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                string output = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    return null;
+                }
+
+                var lines = output.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var line in lines)
+                {
+                    if (line.Contains("BSSID", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var match = Regex.Match(line, "^\\s*SSID\\s*:\\s*(.+)$", RegexOptions.IgnoreCase);
+                    if (match.Success)
+                    {
+                        var ssid = match.Groups[1].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(ssid))
+                        {
+                            return ssid;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to get connected Wi-Fi SSID: {ex.Message}");
+            }
+
+            return null;
         }
 
         private sealed class WifiNetworkOption

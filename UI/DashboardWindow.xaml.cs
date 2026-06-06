@@ -72,7 +72,7 @@ namespace CBTSecureDesktop.UI
             try
             {
                 LoadingPanel.Visibility = Visibility.Visible;
-                ExamsListView.Visibility = Visibility.Collapsed;
+                ExamsListContainer.Visibility = Visibility.Collapsed;
 
                 // Get mahasiswa ID from authenticated user
                 long mahasiswaId = _authService.CurrentUser?.MahasiswaId ?? 0;
@@ -80,10 +80,16 @@ namespace CBTSecureDesktop.UI
                 if (mahasiswaId > 0)
                 {
                     var exams = await _examService.GetAvailableExamsAsync(mahasiswaId);
-                    ExamsListView.ItemsSource = exams;
+                    var orderedExams = exams
+                        .OrderBy(GetExamDisplayPriority)
+                        .ThenBy(x => x.StartTime)
+                        .ThenBy(x => x.NamaUjian)
+                        .ToList();
+
+                    ExamsListView.ItemsSource = orderedExams;
 
                     LoadingPanel.Visibility = Visibility.Collapsed;
-                    ExamsListView.Visibility = Visibility.Visible;
+                    ExamsListContainer.Visibility = Visibility.Visible;
                 }
                 else
                 {
@@ -93,7 +99,7 @@ namespace CBTSecureDesktop.UI
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to load exams: {ex.Message}", "Error", 
+                MessageBox.Show($"Failed to load exams: {ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -188,7 +194,7 @@ namespace CBTSecureDesktop.UI
             {
                 button.IsEnabled = true;
                 DownloadPanel.Visibility = Visibility.Collapsed;
-                ExamsListView.Visibility = Visibility.Visible;
+                ExamsListContainer.Visibility = Visibility.Visible;
             }
         }
 
@@ -316,6 +322,36 @@ namespace CBTSecureDesktop.UI
             MessageBox.Show(message, "Peringatan Unduhan Gambar", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
+        private static int GetExamDisplayPriority(Ujian ujian)
+        {
+            var now = DateTime.Now;
+            var statusGlobal = (ujian.Status ?? string.Empty).Trim().ToLowerInvariant();
+            var statusMahasiswa = (ujian.StatusMahasiswa ?? string.Empty).Trim().ToLowerInvariant();
+
+            bool isFinishedByStudent = statusMahasiswa == "selesai" || statusMahasiswa == "dihentikan";
+            bool isExpired = statusGlobal == "selesai" || now > ujian.ActualEndTime;
+            bool isWaitingStart = now < ujian.StartTime;
+            bool isInProgress = statusMahasiswa == "dimulai";
+            bool isNotStartedByStudent = string.IsNullOrEmpty(statusMahasiswa) || statusMahasiswa == "none" || statusMahasiswa == "menunggu";
+
+            if (isInProgress && !isExpired)
+                return 0;
+
+            if (isNotStartedByStudent && !isExpired)
+                return 1;
+
+            if (isWaitingStart)
+                return 2;
+
+            if (isFinishedByStudent)
+                return 3;
+
+            if (isExpired)
+                return 4;
+
+            return 5;
+        }
+
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
         {
             if (RefreshButton.IsEnabled)
@@ -325,7 +361,7 @@ namespace CBTSecureDesktop.UI
 
                 await LoadExams();
 
-                await Task.Delay(2000); 
+                await Task.Delay(2000);
                 RefreshButton.IsEnabled = true;
                 RefreshButton.Content = "🔄 Refresh";
             }
