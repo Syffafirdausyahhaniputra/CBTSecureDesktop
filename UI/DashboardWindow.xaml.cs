@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Media;
 using CBTSecureDesktop.Services;
 using CBTSecureDesktop.Models;
 
@@ -12,6 +13,7 @@ namespace CBTSecureDesktop.UI
         private readonly ExamService _examService;
         private readonly ImageService _imageService;
         private readonly HashSet<long> _preparedExamIds = new();
+        private int _preparationStatusToken = 0;
 
         public DashboardWindow(AuthService authService)
         {
@@ -129,11 +131,9 @@ namespace CBTSecureDesktop.UI
 
                 if (totalImages == 0)
                 {
-                    MessageBox.Show(
-                        "Tidak ada gambar soal maupun gambar opsi yang perlu diunduh untuk ujian ini.",
-                        "Informasi",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information);
+                    await ShowPreparationStatusAsync(
+                        "Persiapan ujian selesai. Tidak ada gambar soal maupun opsi yang perlu diunduh.",
+                        new SolidColorBrush(Color.FromRgb(30, 58, 138)));
                     _preparedExamIds.Add(ujianId);
                     return;
                 }
@@ -173,11 +173,9 @@ namespace CBTSecureDesktop.UI
                 }
                 else
                 {
-                    MessageBox.Show(
-                        "Persiapan ujian selesai. Semua gambar soal dan opsi telah berhasil diunduh.",
-                        "Persiapan Selesai",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information);
+                    await ShowPreparationStatusAsync(
+                        "Persiapan ujian selesai. Semua gambar soal dan opsi berhasil diunduh.",
+                        new SolidColorBrush(Color.FromRgb(34, 197, 94)));
                 }
 
                 _preparedExamIds.Add(ujianId);
@@ -285,6 +283,22 @@ namespace CBTSecureDesktop.UI
                     MessageBox.Show("Informasi mahasiswa tidak ditemukan. Silakan login kembali.", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
                 }
+            }
+        }
+
+        private async Task ShowPreparationStatusAsync(string message, Brush brush)
+        {
+            var token = ++_preparationStatusToken;
+            PreparationStatusText.Text = message;
+            PreparationStatusText.Foreground = brush;
+            PreparationStatusText.Visibility = Visibility.Visible;
+
+            await Task.Delay(4500);
+
+            if (token == _preparationStatusToken)
+            {
+                PreparationStatusText.Text = string.Empty;
+                PreparationStatusText.Visibility = Visibility.Collapsed;
             }
         }
 

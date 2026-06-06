@@ -37,6 +37,7 @@ namespace CBTSecureDesktop.UI
         private const double MaxImageZoom = 3.0;
         private const double ImageZoomStep = 0.1;
         private double _currentImageZoom = 1.0;
+        private int _imageRefreshStatusToken = 0;
 
         // Cached values to compute remaining time efficiently
         private DateTime? _examGlobalEndTime = null;
@@ -323,6 +324,9 @@ namespace CBTSecureDesktop.UI
             QuestionNumberText.Text = $"Pertanyaan {question.QuestionNumber}";
             QuestionText.Text = HtmlHelper.ConvertToPlainText(question.QuestionText);
             QuestionCountText.Text = $"Soal {index + 1} dari {_questions.Count}";
+
+            ImageRefreshStatusText.Text = string.Empty;
+            ImageRefreshStatusText.Visibility = Visibility.Collapsed;
 
             // Manage image display (Image caching logic moved to PreDownloadImagesAsync)
             if (question.Images != null && question.Images.Count > 0 && !string.IsNullOrEmpty(question.Images[0]))
@@ -614,29 +618,51 @@ namespace CBTSecureDesktop.UI
 
         private async void RefreshImageButton_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button btn)
+            if (sender is not Button btn)
             {
-                btn.IsEnabled = false;
-                btn.Content = "🔄 Menyegarkan...";
+                return;
+            }
 
+            btn.IsEnabled = false;
+            btn.Content = "🔄 Menyegarkan...";
+
+            try
+            {
                 var question = _questions[_currentQuestionIndex];
-                if (question.Images != null && question.Images.Count > 0 && !string.IsNullOrEmpty(question.Images[0]))
+                if (question.Images == null || question.Images.Count == 0 || string.IsNullOrEmpty(question.Images[0]))
                 {
-                    try
-                    {
-                        var bitmap = await _imageService.RefreshImageCacheAsync(question.Images[0], "abc123");
-                        SetImageSectionVisibility(Visibility.Visible);
-                        QuestionImage.Source = bitmap;
-                        QuestionImage.Visibility = Visibility.Visible;
-                        ApplyImageZoom();
-                    }
-                    catch
-                    {
-                        SetImageSectionVisibility(Visibility.Collapsed);
-                        QuestionImage.Visibility = Visibility.Collapsed;
-                    }
+                    await ShowImageRefreshStatusAsync("Tidak ada gambar pada soal ini.", new SolidColorBrush(Color.FromRgb(107, 114, 128)));
+                    return;
                 }
 
+                var imageId = question.Images[0];
+                var bitmap = await _imageService.RefreshImageCacheAsync(imageId, "abc123");
+                var downloadFailures = ImageService.ConsumeDownloadFailures();
+                var currentImageFailure = downloadFailures.FirstOrDefault(f => f.StartsWith($"{imageId}:"));
+
+                if (!string.IsNullOrEmpty(currentImageFailure))
+                {
+                    SetImageSectionVisibility(Visibility.Collapsed);
+                    QuestionImage.Visibility = Visibility.Collapsed;
+                    MessageBox.Show($"Gagal mendownload gambar terbaru.\n\nDetail: {currentImageFailure}", "Refresh Gambar Gagal", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                SetImageSectionVisibility(Visibility.Visible);
+                QuestionImage.Source = bitmap;
+                QuestionImage.Visibility = Visibility.Visible;
+                ApplyImageZoom();
+
+                await ShowImageRefreshStatusAsync("Gambar berhasil diperbarui.", new SolidColorBrush(Color.FromRgb(34, 197, 94)));
+            }
+            catch (Exception ex)
+            {
+                SetImageSectionVisibility(Visibility.Collapsed);
+                QuestionImage.Visibility = Visibility.Collapsed;
+                MessageBox.Show($"Gagal menyegarkan gambar.\n\nDetail: {ex.Message}", "Refresh Gambar Gagal", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
                 btn.Content = "🔄 Refresh Gambar";
                 btn.IsEnabled = true;
             }
@@ -677,6 +703,22 @@ namespace CBTSecureDesktop.UI
         private void ApplyImageZoom()
         {
             QuestionImage.LayoutTransform = new ScaleTransform(_currentImageZoom, _currentImageZoom);
+        }
+
+        private async Task ShowImageRefreshStatusAsync(string message, Brush foreground)
+        {
+            var statusToken = ++_imageRefreshStatusToken;
+            ImageRefreshStatusText.Text = message;
+            ImageRefreshStatusText.Foreground = foreground;
+            ImageRefreshStatusText.Visibility = Visibility.Visible;
+
+            await Task.Delay(3500);
+
+            if (statusToken == _imageRefreshStatusToken)
+            {
+                ImageRefreshStatusText.Text = string.Empty;
+                ImageRefreshStatusText.Visibility = Visibility.Collapsed;
+            }
         }
 
         private void SetImageSectionVisibility(Visibility visibility)

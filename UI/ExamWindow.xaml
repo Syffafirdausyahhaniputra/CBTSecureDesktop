@@ -222,8 +222,15 @@
                                                 Style="{StaticResource PolinemaButtonSecondary}"
                                                 Padding="10,5"
                                                 FontSize="12"
-                                                Margin="0,0,0,8"
+                                                Margin="0,0,0,6"
                                                 Click="RefreshImageButton_Click"/>
+                                        <TextBlock x:Name="ImageRefreshStatusText"
+                                                   Text=""
+                                                   FontSize="11"
+                                                   Foreground="Gray"
+                                                   TextWrapping="Wrap"
+                                                   Margin="2,0,0,8"
+                                                   Visibility="Collapsed"/>
                                         <Button x:Name="ZoomOutImageButton"
                                                 Content="− Zoom Out"
                                                 Style="{StaticResource PolinemaButtonSecondary}"
