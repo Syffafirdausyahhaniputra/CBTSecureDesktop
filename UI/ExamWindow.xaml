@@ -21,6 +21,31 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Badge Visibility Animation -->
+        <Storyboard x:Key="BadgeFadeInStoryboard">
+            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                           From="0" To="1"
+                           Duration="0:0:0.3"/>
+        </Storyboard>
+
+        <Storyboard x:Key="BadgeFadeOutStoryboard">
+            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                           From="1" To="0"
+                           Duration="0:0:0.2"/>
+        </Storyboard>
+
+        <!-- Count Update Animation (scale pulse) -->
+        <Storyboard x:Key="PulseScaleStoryboard">
+            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX"
+                           From="1.0" To="1.08" Duration="0:0:0.15"/>
+            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY"
+                           From="1.0" To="1.08" Duration="0:0:0.15"/>
+            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX"
+                           From="1.08" To="1.0" Duration="0:0:0.15" BeginTime="0:0:0.15"/>
+            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY"
+                           From="1.08" To="1.0" Duration="0:0:0.15" BeginTime="0:0:0.15"/>
+        </Storyboard>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -156,7 +181,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <!-- Question Number Badge -->
+
                         <Border Grid.Column="0" Background="{StaticResource PolinemaBluePrimary}"
                                CornerRadius="25"
                                Padding="20,10"
@@ -165,13 +190,99 @@
                                       Text="Pertanyaan 1" 
                                       FontSize="16" 
                                       FontWeight="Bold"
-                                      Foreground="{StaticResource PolinemaWhite}"/>
+                                      Foreground="{StaticResource PolinemaWhite}"
+                                      VerticalAlignment="Center"/>
                         </Border>
 
-                        <!-- Refresh Button -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock x:Name="OfflineStatusText" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="DarkOrange" FontWeight="SemiBold" Visibility="Collapsed">Offline: jawaban disimpan sementara</TextBlock>
-                            <TextBlock x:Name="PendingCountText" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="White" FontWeight="Bold" Background="DarkRed" Padding="4,2" Visibility="Collapsed" Text="" ToolTip="Ada jawaban yang tersimpan lokal dan belum tersinkron. Sambungkan internet untuk mengirimnya ke server."/>
+                            <Border x:Name="OfflineStatusBorder" 
+                                    Background="#FEF3C7"
+                                    BorderBrush="#F59E0B"
+                                    BorderThickness="2"
+                                    CornerRadius="20"
+                                    Padding="16,8"
+                                    Margin="0,0,12,0"
+                                    Visibility="Collapsed"
+                                    VerticalAlignment="Center"
+                                    Opacity="0">
+                                <Border.RenderTransform>
+                                    <ScaleTransform ScaleX="1.0" ScaleY="1.0"/>
+                                </Border.RenderTransform>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="⏳" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="Mode Offline" FontSize="13" FontWeight="Bold" Foreground="#B45309"/>
+                                            <TextBlock x:Name="OfflineStatusText" Text="Jawaban disimpan otomatis" FontSize="11" Foreground="#92400E" Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <Border Grid.Column="2" 
+                                           Background="#F59E0B"
+                                           CornerRadius="12"
+                                           Padding="6,2"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center">
+                                        <Button Content="📡 Coba Sambung"
+                                               Foreground="White"
+                                               BorderThickness="0"
+                                               Padding="10,4"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Cursor="Hand"
+                                               Click="WifiButton_Click"
+                                               ToolTip="Buka dialog Wi-Fi untuk menyambungkan internet kembali">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="Transparent"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter Property="Background" Value="Transparent"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Border>
+                                </Grid>
+                            </Border>
+
+                            <Border x:Name="PendingCountBorder" 
+                                   Background="#DC2626"
+                                   BorderBrush="#991B1B"
+                                   BorderThickness="2"
+                                   CornerRadius="20"
+                                   Padding="16,8"
+                                   Margin="0,0,12,0"
+                                   Visibility="Collapsed"
+                                   VerticalAlignment="Center"
+                                   ToolTip="Ada jawaban yang menunggu dikirim ke server">
+                                <Border.RenderTransform>
+                                    <ScaleTransform x:Name="PendingCountScale" ScaleX="1.0" ScaleY="1.0"/>
+                                </Border.RenderTransform>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="⏱️" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock FontSize="13" FontWeight="Bold" Foreground="White">
+                                            <Run Text="Pending: "/>
+                                            <Run x:Name="PendingCountText" Text="0" FontSize="14"/>
+                                        </TextBlock>
+                                        <TextBlock x:Name="PendingStatusText" Text="Sinkronisasi &amp; kirim" FontSize="11" Foreground="#FCA5A5" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
                             <Button x:Name="DoubtToggleButton"
                                     Style="{StaticResource RoundedPreviewTagButtonStyle}"
                                     HorizontalAlignment="Right"
@@ -185,14 +296,38 @@
                                     FontSize="13"
                                     FontWeight="SemiBold"
                                     Margin="0,0,10,0"
-                                    Click="DoubtToggleButton_Click"/>
+                                    Cursor="Hand"
+                                    Click="DoubtToggleButton_Click">
+                                <Button.Resources>
+                                    <Style TargetType="Button" BasedOn="{StaticResource RoundedPreviewTagButtonStyle}">
+                                        <Style.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Background" Value="#F8FAFC"/>
+                                                <Setter Property="BorderBrush" Value="#94A3B8"/>
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Resources>
+                            </Button>
+
                             <Button x:Name="RefreshExamButton"
                                     HorizontalAlignment="Right"
                                     Content="🔄 Refresh Soal"
                                     Style="{StaticResource PolinemaButtonSecondary}"
                                     Padding="15,8"
                                     FontSize="13"
-                                    Click="RefreshExamButton_Click"/>
+                                    Cursor="Hand"
+                                    Click="RefreshExamButton_Click">
+                                <Button.Resources>
+                                    <Style TargetType="Button" BasedOn="{StaticResource PolinemaButtonSecondary}">
+                                        <Style.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Background" Value="{Binding Background, RelativeSource={RelativeSource Self}}"/>
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Resources>
+                            </Button>
                         </StackPanel>
                     </Grid>
 

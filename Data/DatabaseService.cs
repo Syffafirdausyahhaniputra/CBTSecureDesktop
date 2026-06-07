@@ -63,7 +63,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Authentication error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (AuthenticateUserAsync): {ex.Message}");
                 return null;
             }
         }
@@ -104,7 +103,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get mahasiswa error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetMahasiswaByIdAsync): {ex.Message}");
                 return null;
             }
         }
@@ -158,7 +156,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Change password error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (ChangeUserPasswordAsync): {ex.Message}");
                 return (false, "Terjadi kesalahan saat mengubah password.");
             }
         }
@@ -227,7 +224,6 @@ namespace CBTSecureDesktop.Data
                         catch (Exception ex)
                         {
                             System.Diagnostics.Debug.WriteLine($"Get exams error: {ex.Message}");
-                            System.Windows.MessageBox.Show($"DB Error (GetAvailableExamsForStudentAsync): {ex.Message}");
                         }
                         return exams;
                     }
@@ -350,7 +346,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get questions error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetExamQuestionsAsync): {ex.Message}");
             }
             return questions;
         }
@@ -398,7 +393,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get options error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetAnswerOptionsAsync): {ex.Message}");
             }
             return options;
         }
@@ -435,7 +429,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get images error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetQuestionImagesAsync): {ex.Message}");
             }
             return images;
         }
@@ -540,8 +533,7 @@ namespace CBTSecureDesktop.Data
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Save answer error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (SaveStudentAnswerAsync): {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"SaveStudentAnswerAsync error: {ex.Message}");
                 return false;
             }
         }
@@ -616,7 +608,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get student answers error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetStudentAnswersAsync): {ex.Message}");
             }
             return answers;
         }
@@ -675,7 +666,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Start exam session error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (StartExamSessionAsync): {ex.Message}");
                 return -1;
             }
         }
@@ -712,7 +702,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"End exam session error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (EndExamSessionAsync): {ex.Message}");
                 return false;
             }
         }
@@ -766,7 +755,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Calculate score error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (CalculateExamScoreAsync): {ex.Message}");
                 return 0;
             }
         }
@@ -830,7 +818,6 @@ namespace CBTSecureDesktop.Data
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Get exam result error: {ex.Message}");
-                System.Windows.MessageBox.Show($"DB Error (GetStudentExamResultAsync): {ex.Message}");
                 return null;
             }
         }

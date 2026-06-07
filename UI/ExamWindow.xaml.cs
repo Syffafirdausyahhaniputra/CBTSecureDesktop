@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using System.Linq;
 using System.Text;
@@ -45,6 +46,9 @@ namespace CBTSecureDesktop.UI
         private DateTime? _examGlobalEndTime = null;
         private int _examGlobalExtendMinutes = 0;
 
+        // Network status tracking
+        private bool _isOnline = true;
+
         public ExamWindow(AuthService authService, ExamService examService, long ujianId, long mahasiswaId)
         {
             InitializeComponent();
@@ -64,34 +68,31 @@ namespace CBTSecureDesktop.UI
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += Timer_Tick;
 
-            // Start a brief network check to update offline status indicator and subscribe to pending count
-            _ = Task.Run(async () =>
+            // First: Subscribe to pending count changes immediately (before network check)
+            _examService.PendingCountChanged += cnt => Application.Current.Dispatcher.Invoke(() => 
             {
-                try
-                {
-                    await Task.Delay(500);
-                    var online = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId) != null; // quick check
-                    Application.Current.Dispatcher.Invoke(() => OfflineStatusText.Visibility = online ? Visibility.Collapsed : Visibility.Visible);
-
-                    // subscribe to pending updates from service
-                    _examService.PendingCountChanged += cnt => Application.Current.Dispatcher.Invoke(() => 
-                    {
-                        PendingCountText.Text = cnt > 0 ? $"({cnt})" : string.Empty;
-                        PendingCountText.Visibility = cnt > 0 ? Visibility.Visible : Visibility.Collapsed;
-                    });
-
-                    // initialize pending count
-                    var initial = await _examService.GetPendingCountAsync();
-                    Application.Current.Dispatcher.Invoke(() => 
-                    {
-                        PendingCountText.Text = initial > 0 ? $"({initial})" : string.Empty;
-                        PendingCountText.Visibility = initial > 0 ? Visibility.Visible : Visibility.Collapsed;
-                    });
-                }
-                catch { }
+                PendingCountText.Text = cnt.ToString();
+                PendingCountBorder.Visibility = cnt > 0 ? Visibility.Visible : Visibility.Collapsed;
+                UpdatePendingStatusText(cnt);
             });
 
-            // Monitor network events via periodic small ping; when coming back online trigger immediate flush
+            // Initialize pending count immediately (non-blocking)
+            _ = Task.Run(async () =>
+            {
+                var initial = await _examService.GetPendingCountAsync();
+                if (initial > 0)
+                {
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        PendingCountText.Text = initial.ToString();
+                        PendingCountBorder.Visibility = Visibility.Visible;
+                        UpdatePendingStatusText(initial);
+                    });
+                }
+            });
+
+            // Start immediate network monitoring to keep UI responsive
+            // This loop runs independently and continuously checks network status
             _ = Task.Run(async () =>
             {
                 bool lastOnline = true;
@@ -99,22 +100,44 @@ namespace CBTSecureDesktop.UI
                 {
                     try
                     {
+                        // Quick network check (short timeout)
                         var online = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId) != null;
-                        if (online && !lastOnline)
-                        {
-                            // we came back online, trigger immediate flush
-                            await _examService.TriggerFlushAsync();
-                            Application.Current.Dispatcher.Invoke(() => OfflineStatusText.Visibility = Visibility.Collapsed);
-                        }
-                        else if (!online)
-                        {
-                            Application.Current.Dispatcher.Invoke(() => OfflineStatusText.Visibility = Visibility.Visible);
-                        }
-                        lastOnline = online;
-                    }
-                    catch { }
 
-                    await Task.Delay(5000);
+                        // Always update _isOnline status (don't skip unchanged state)
+                        _isOnline = online;
+
+                        // Only update UI when status changes
+                        if (online != lastOnline)
+                        {
+                            Application.Current.Dispatcher.Invoke(() => 
+                            {
+                                UpdateOfflineUIStatus(online);
+                                if (online)
+                                {
+                                    PendingStatusText.Text = "Mengirim ke server...";
+                                    // Trigger flush when reconnected
+                                    _ = _examService.TriggerFlushAsync();
+                                }
+                            });
+                            lastOnline = online;
+                        }
+                    }
+                    catch
+                    {
+                        // If check fails, assume offline
+                        _isOnline = false;
+                        if (lastOnline)
+                        {
+                            Application.Current.Dispatcher.Invoke(() => 
+                            {
+                                UpdateOfflineUIStatus(false);
+                            });
+                            lastOnline = false;
+                        }
+                    }
+
+                    // Check more frequently for better responsiveness (2 seconds instead of 5)
+                    await Task.Delay(2000);
                 }
             });
 
@@ -594,7 +617,16 @@ namespace CBTSecureDesktop.UI
             UpdateProgressText();
             UpdateNavPanelHighlight();
 
-            await _examService.SaveAnswersAsync(_questions[_currentQuestionIndex].QuestionNumber, _questions[_currentQuestionIndex].SelectedAnswers);
+            // Save answers silently - errors are queued as pending
+            try
+            {
+                await _examService.SaveAnswersAsync(_questions[_currentQuestionIndex].QuestionNumber, _questions[_currentQuestionIndex].SelectedAnswers);
+            }
+            catch (Exception ex)
+            {
+                // Silently handle - error is already queued in service as pending answer
+                System.Diagnostics.Debug.WriteLine($"Save multi answers error (already queued): {ex.Message}");
+            }
         }
 
         private async void OptionRadioButton_Checked(object sender, RoutedEventArgs e)
@@ -610,8 +642,16 @@ namespace CBTSecureDesktop.UI
                 // Update nav panel
                 UpdateNavPanelHighlight();
 
-                // Save answer to database
-                await _examService.SaveAnswerAsync(_questions[_currentQuestionIndex].QuestionNumber, answerIndex);
+                // Save answer to database (quietly - errors become pending)
+                try
+                {
+                    await _examService.SaveAnswerAsync(_questions[_currentQuestionIndex].QuestionNumber, answerIndex);
+                }
+                catch (Exception ex)
+                {
+                    // Silently handle - error is already queued in service as pending answer
+                    System.Diagnostics.Debug.WriteLine($"Save single answer error (already queued): {ex.Message}");
+                }
             }
         }
 
@@ -1023,7 +1063,7 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private bool ShowSubmitPreviewDialog()
+        private async Task<bool> ShowSubmitPreviewDialog(bool isOnline)
         {
             var answeredConfident = _questions
                 .Select((q, index) => new { q, index })
@@ -1042,6 +1082,14 @@ namespace CBTSecureDesktop.UI
                 .Where(x => !IsQuestionAnswered(x.q))
                 .Select(x => x.index)
                 .ToList();
+
+            // Get pending soal IDs for offline indicator - in background to avoid blocking
+            var pendingSoalIds = await Task.Run(async () => await _examService.GetPendingSoalIdsAsync());
+            var pendingQuestionIndexes = _questions
+                .Select((q, index) => new { q, index })
+                .Where(x => pendingSoalIds.Contains(x.q.SoalId))
+                .Select(x => x.index)
+                .ToHashSet();
 
             var dialog = new Window
             {
@@ -1109,10 +1157,15 @@ namespace CBTSecureDesktop.UI
                 foreach (var index in indexes)
                 {
                     var questionNumber = _questions[index].QuestionNumber;
+                    var isPending = pendingQuestionIndexes.Contains(index);
+
+                    // Create button with pending indicator
+                    var btnGrid = new Grid { Width = 130 };
+                    btnGrid.Margin = new Thickness(0, 0, 8, 8);
+
                     var btn = new Button
                     {
                         Content = $"Soal {questionNumber}",
-                        Margin = new Thickness(0, 0, 8, 8),
                         Padding = new Thickness(12, 8, 12, 8),
                         Tag = index,
                         Background = buttonBackground,
@@ -1130,7 +1183,33 @@ namespace CBTSecureDesktop.UI
                         dialog.Close();
                     };
 
-                    wrap.Children.Add(btn);
+                    btnGrid.Children.Add(btn);
+
+                    // Add pending badge if applicable
+                    if (isPending)
+                    {
+                        var pendingBadge = new Border
+                        {
+                            Background = new SolidColorBrush(Color.FromRgb(220, 38, 38)),
+                            CornerRadius = new CornerRadius(10),
+                            Padding = new Thickness(4, 2, 4, 2),
+                            HorizontalAlignment = HorizontalAlignment.Right,
+                            VerticalAlignment = VerticalAlignment.Top,
+                            Margin = new Thickness(0, -8, -8, 0)
+                        };
+                        pendingBadge.Child = new TextBlock
+                        {
+                            Text = "⏱",
+                            Foreground = Brushes.White,
+                            FontSize = 10,
+                            FontWeight = FontWeights.Bold,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
+                        btnGrid.Children.Add(pendingBadge);
+                    }
+
+                    wrap.Children.Add(btnGrid);
                 }
 
                 panel.Children.Add(wrap);
@@ -1165,6 +1244,47 @@ namespace CBTSecureDesktop.UI
             Grid.SetRow(scroll, 1);
             root.Children.Add(scroll);
 
+            // Add offline warning banner if needed
+            if (!isOnline)
+            {
+                var offlineWarningBorder = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(254, 243, 224)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(217, 119, 6)),
+                    BorderThickness = new Thickness(0, 0, 0, 2),
+                    Padding = new Thickness(16, 12, 16, 12),
+                    Margin = new Thickness(0, 0, 0, 14)
+                };
+
+                var warningPanel = new StackPanel();
+                warningPanel.Children.Add(new TextBlock
+                {
+                    Text = "⚠️ Mode Offline Aktif",
+                    FontSize = 13,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(161, 98, 7)),
+                    Margin = new Thickness(0, 0, 0, 6)
+                });
+                warningPanel.Children.Add(new TextBlock
+                {
+                    Text = "Anda tidak dapat mengirim ujian saat offline. Sambungkan ke internet terlebih dahulu untuk melanjutkan submit.",
+                    FontSize = 12,
+                    Foreground = new SolidColorBrush(Color.FromRgb(120, 80, 0)),
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 14)
+                });
+
+                offlineWarningBorder.Child = warningPanel;
+
+                // Insert warning at top (after row 1)
+                root.RowDefinitions.Insert(1, new RowDefinition { Height = GridLength.Auto });
+                // Shift scroll to row 2
+                Grid.SetRow(scroll, 2);
+                offlineWarningBorder.Margin = new Thickness(0, 0, 0, 0);
+                Grid.SetRow(offlineWarningBorder, 1);
+                root.Children.Add(offlineWarningBorder);
+            }
+
             var footer = new Grid { Margin = new Thickness(0, 10, 0, 0) };
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1198,17 +1318,27 @@ namespace CBTSecureDesktop.UI
             {
                 Content = "Lanjutkan Submit",
                 Style = (Style)FindResource("PolinemaButtonPrimary"),
-                Padding = new Thickness(14, 9, 14, 9)
+                Padding = new Thickness(14, 9, 14, 9),
+                IsEnabled = isOnline  // Disable if offline
             };
             continueButton.Click += (_, __) =>
             {
+                if (!isOnline)
+                {
+                    MessageBox.Show(
+                        "Anda sedang dalam mode offline. Sambungkan ke internet terlebih dahulu untuk mengirim ujian.",
+                        "Tidak Bisa Submit - Mode Offline",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
                 dialog.DialogResult = true;
                 dialog.Close();
             };
             Grid.SetColumn(continueButton, 2);
             footer.Children.Add(continueButton);
 
-            Grid.SetRow(footer, 2);
+            Grid.SetRow(footer, isOnline ? 2 : 3);  // Adjust row based on whether warning is shown
             root.Children.Add(footer);
 
             dialog.Content = root;
@@ -1217,93 +1347,139 @@ namespace CBTSecureDesktop.UI
 
         private async void SubmitButton_Click(object sender, RoutedEventArgs e)
         {
-            if (!ShowSubmitPreviewDialog())
-            {
-                return;
-            }
+            // Disable button immediately to prevent double-clicks/freezing
+            var submitBtn = sender as Button;
+            if (submitBtn == null) return;
 
-            var unanswered = _questions.Count(q => !IsQuestionAnswered(q));
-            var doubtful = _questions.Count(q => q.IsDoubtful);
-
-            var result = MessageBox.Show(
-                $"Ringkasan sebelum submit:\n- Belum dijawab: {unanswered}\n- Ditandai ragu-ragu: {doubtful}\n\n" +
-                "Apakah Anda yakin ingin mengirim jawaban ujian?\nAnda tidak dapat mengubah jawaban setelah dikirim.",
-                "Konfirmasi Pengiriman",
-                MessageBoxButton.YesNo,
-                unanswered > 0 || doubtful > 0 ? MessageBoxImage.Question : MessageBoxImage.Warning);
-
-            if (result == MessageBoxResult.No)
-            {
-                return;
-            }
-
-            // Stop timer
-            _timer.Stop();
-
-            // Disable buttons
-            SubmitButton.IsEnabled = false;
-            PreviousButton.IsEnabled = false;
-            NextButton.IsEnabled = false;
+            submitBtn.IsEnabled = false;
 
             try
             {
-                // Submit exam to database
-                bool success = await _examService.SubmitExamAsync(_ujianId, _mahasiswaId);
-
-                if (success)
+                // Call preview dialog asynchronously - pass isOnline parameter
+                // User can see preview even offline, but submit will be blocked in dialog
+                if (!await ShowSubmitPreviewDialog(_isOnline))
                 {
-                    await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
-
-                    // Keep the feedback minimal: only show that exam is finished
-                    string message = "Ujian berhasil dikirim!\n\nStatus: Selesai." +
-                                     $"\nWaktu pengerjaan: {_elapsedSeconds / 60} menit {_elapsedSeconds % 60} detik";
-
-                    MessageBox.Show(message, "Pengiriman Selesai",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-
-                    // Delete any downloaded cached images related to this exam
-                    try
-                    {
-                        var imageIds = _questions
-                            .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
-                            .Where(id => !string.IsNullOrWhiteSpace(id))
-                            .Distinct()
-                            .ToList();
-
-                        if (imageIds.Count > 0)
-                        {
-                            // Fire-and-forget deletion to speed up returning to dashboard.
-                            _ = _imageService.DeleteCacheFilesAsync(imageIds);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after submit: {ex.Message}");
-                    }
-
-                    // Deactivate security and navigate to dashboard
-                    DeactivateSecurityMode();
-                    var dashboard = new DashboardWindow(_authService);
-                    dashboard.Show();
-                    this.Close();
+                    submitBtn.IsEnabled = true;
+                    return;
                 }
-                else
-                {
-                    MessageBox.Show("Gagal mengirim ujian. Silakan coba lagi.",
-                        "Kesalahan Pengiriman", MessageBoxButton.OK, MessageBoxImage.Error);
 
-                    // Re-enable buttons
-                    SubmitButton.IsEnabled = true;
+                // Check if there are pending answers - use background task
+                int pendingCount = await Task.Run(async () => await _examService.GetPendingCountAsync());
+                if (pendingCount > 0)
+                {
+                    // Show dialog asking user to sync first
+                    var syncResult = MessageBox.Show(
+                        $"Anda memiliki {pendingCount} jawaban yang belum sinkronisasi ke server.\n\n" +
+                        "Untuk memastikan semua jawaban terekam dengan baik, silakan:\n" +
+                        "1. Pastikan koneksi internet Anda stabil\n" +
+                        "2. Tunggu hingga semua jawaban tersinkronisasi\n\n" +
+                        "Lanjutkan submit sekarang? (Jawaban yang belum tersinkronisasi akan tetap dicoba dikirim)",
+                        "Jawaban Belum Tersinkronisasi",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning);
+
+                    if (syncResult == MessageBoxResult.No)
+                    {
+                        submitBtn.IsEnabled = true;
+                        return;
+                    }
+
+                    // Show sync progress
+                    await ShowSyncProgressAsync(pendingCount);
+                }
+
+                var unanswered = _questions.Count(q => !IsQuestionAnswered(q));
+                var doubtful = _questions.Count(q => q.IsDoubtful);
+
+                var result = MessageBox.Show(
+                    $"Ringkasan sebelum submit:\n- Belum dijawab: {unanswered}\n- Ditandai ragu-ragu: {doubtful}\n\n" +
+                    "Apakah Anda yakin ingin mengirim jawaban ujian?\nAnda tidak dapat mengubah jawaban setelah dikirim.",
+                    "Konfirmasi Pengiriman",
+                    MessageBoxButton.YesNo,
+                    unanswered > 0 || doubtful > 0 ? MessageBoxImage.Question : MessageBoxImage.Warning);
+
+                if (result == MessageBoxResult.No)
+                {
+                    submitBtn.IsEnabled = true;
+                    return;
+                }
+
+                // Stop timer
+                _timer.Stop();
+
+                // Disable nav buttons
+                PreviousButton.IsEnabled = false;
+                NextButton.IsEnabled = false;
+
+                try
+                {
+                    // Submit exam to database in background (non-blocking)
+                    bool success = await Task.Run(async () => await _examService.SubmitExamAsync(_ujianId, _mahasiswaId));
+
+                    if (success)
+                    {
+                        await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
+
+                        // Keep the feedback minimal: only show that exam is finished
+                        string message = "Ujian berhasil dikirim!\n\nStatus: Selesai." +
+                                         $"\nWaktu pengerjaan: {_elapsedSeconds / 60} menit {_elapsedSeconds % 60} detik";
+
+                        MessageBox.Show(message, "Pengiriman Selesai",
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+
+                        // Delete any downloaded cached images related to this exam
+                        try
+                        {
+                            var imageIds = _questions
+                                .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
+                                .Where(id => !string.IsNullOrWhiteSpace(id))
+                                .Distinct()
+                                .ToList();
+
+                            if (imageIds.Count > 0)
+                            {
+                                // Fire-and-forget deletion to speed up returning to dashboard.
+                                _ = _imageService.DeleteCacheFilesAsync(imageIds);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after submit: {ex.Message}");
+                        }
+
+                        // Deactivate security and navigate to dashboard
+                        DeactivateSecurityMode();
+                        var dashboard = new DashboardWindow(_authService);
+                        dashboard.Show();
+                        this.Close();
+                    }
+                    else
+                    {
+                        MessageBox.Show("Gagal mengirim ujian. Silakan coba lagi.",
+                            "Kesalahan Pengiriman", MessageBoxButton.OK, MessageBoxImage.Error);
+
+                        // Re-enable buttons
+                        submitBtn.IsEnabled = true;
+                        PreviousButton.IsEnabled = true;
+                        NextButton.IsEnabled = true;
+                        _timer.Start();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Kesalahan mengirim ujian: {ex.Message}",
+                        "Kesalahan", MessageBoxButton.OK, MessageBoxImage.Error);
+
+                    submitBtn.IsEnabled = true;
+                    PreviousButton.IsEnabled = true;
+                    NextButton.IsEnabled = true;
                     _timer.Start();
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Kesalahan mengirim ujian: {ex.Message}",
-                    "Kesalahan", MessageBoxButton.OK, MessageBoxImage.Error);
-
-                SubmitButton.IsEnabled = true;
-                _timer.Start();
+                System.Diagnostics.Debug.WriteLine($"Submit button error: {ex.Message}");
+                submitBtn.IsEnabled = true;
             }
         }
 
@@ -1720,6 +1896,171 @@ namespace CBTSecureDesktop.UI
                 // Security already deactivated (after submission), allow close
                 _timer.Stop();
                 DeactivateSecurityMode();
+            }
+        }
+
+        /// <summary>
+        /// Updates offline status UI visibility and styling with animation
+        /// </summary>
+        private void UpdateOfflineUIStatus(bool isOnline)
+        {
+            if (isOnline)
+            {
+                // Fade out offline badge animation
+                if (OfflineStatusBorder.Visibility == Visibility.Visible)
+                {
+                    var fadeOut = (Storyboard)this.FindResource("BadgeFadeOutStoryboard");
+                    fadeOut.Completed += (s, e) =>
+                    {
+                        OfflineStatusBorder.Visibility = Visibility.Collapsed;
+                    };
+                    fadeOut.Begin(OfflineStatusBorder);
+                }
+
+                // Also fade out and hide pending count badge
+                if (PendingCountBorder.Visibility == Visibility.Visible)
+                {
+                    var fadeOut = (Storyboard)this.FindResource("BadgeFadeOutStoryboard");
+                    fadeOut.Completed += (s, e) =>
+                    {
+                        PendingCountBorder.Visibility = Visibility.Collapsed;
+                    };
+                    fadeOut.Begin(PendingCountBorder);
+                }
+
+                OfflineStatusText.Text = "Terhubung";
+            }
+            else
+            {
+                // Show and fade in offline badge
+                OfflineStatusBorder.Visibility = Visibility.Visible;
+                OfflineStatusBorder.Opacity = 0;
+                OfflineStatusText.Text = "Jawaban disimpan otomatis";
+
+                var fadeIn = (Storyboard)this.FindResource("BadgeFadeInStoryboard");
+                fadeIn.Begin(OfflineStatusBorder);
+            }
+        }
+
+        /// <summary>
+        /// Updates pending status message based on pending count with animation pulse
+        /// </summary>
+        private void UpdatePendingStatusText(int pendingCount)
+        {
+            // Trigger pulse animation on pending badge
+            if (pendingCount > 0 && PendingCountBorder.Visibility == Visibility.Visible)
+            {
+                try
+                {
+                    var pulse = (Storyboard)this.FindResource("PulseScaleStoryboard");
+                    pulse.Begin(PendingCountText.Parent as FrameworkElement);
+                }
+                catch { }
+            }
+
+            if (pendingCount == 0)
+            {
+                PendingStatusText.Text = "Sinkronisasi & kirim";
+            }
+            else if (pendingCount == 1)
+            {
+                PendingStatusText.Text = "1 jawaban menunggu";
+            }
+            else
+            {
+                PendingStatusText.Text = $"{pendingCount} jawaban menunggu";
+            }
+        }
+
+        /// <summary>
+        /// Shows a progress dialog while syncing pending answers to server
+        /// </summary>
+        private async Task ShowSyncProgressAsync(int initialPendingCount)
+        {
+            var syncWindow = new Window
+            {
+                Title = "Sinkronisasi Jawaban",
+                Width = 500,
+                Height = 280,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                WindowStyle = WindowStyle.ToolWindow,
+                ResizeMode = ResizeMode.NoResize,
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252))
+            };
+
+            var root = new StackPanel { Margin = new Thickness(30) };
+
+            root.Children.Add(new TextBlock
+            {
+                Text = "Sinkronisasi Jawaban",
+                FontSize = 20,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(30, 58, 138)),
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var statusText = new TextBlock
+            {
+                Text = $"Mengirim {initialPendingCount} jawaban...",
+                FontSize = 14,
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+                Margin = new Thickness(0, 0, 0, 15)
+            };
+            root.Children.Add(statusText);
+
+            var progressBar = new ProgressBar
+            {
+                Height = 8,
+                Background = new SolidColorBrush(Color.FromRgb(229, 231, 235)),
+                Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)),
+                IsIndeterminate = true,
+                Margin = new Thickness(0, 0, 0, 15)
+            };
+            root.Children.Add(progressBar);
+
+            var infoText = new TextBlock
+            {
+                Text = "Jangan tutup aplikasi ini sambil sinkronisasi sedang berlangsung.\nIni mungkin membutuhkan beberapa detik tergantung kecepatan koneksi Anda.",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 15)
+            };
+            root.Children.Add(infoText);
+
+            syncWindow.Content = root;
+            syncWindow.Show();
+
+            // Monitor pending count until sync completes
+            int lastPendingCount = initialPendingCount;
+            var timeoutTimer = DateTime.Now.AddSeconds(60); // Max 60 second timeout
+
+            while (lastPendingCount > 0 && DateTime.Now < timeoutTimer)
+            {
+                await Task.Delay(1000);
+                lastPendingCount = await _examService.GetPendingCountAsync();
+
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    statusText.Text = lastPendingCount > 0 
+                        ? $"Mengirim {lastPendingCount} jawaban..." 
+                        : "Semua jawaban telah sinkronisasi!";
+                });
+
+                if (lastPendingCount == 0)
+                {
+                    progressBar.IsIndeterminate = false;
+                    progressBar.Value = 100;
+                }
+            }
+
+            // Close after brief delay to show completion
+            await Task.Delay(500);
+
+            if (syncWindow.IsLoaded)
+            {
+                syncWindow.Close();
             }
         }
     }

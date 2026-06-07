@@ -71,6 +71,16 @@ namespace CBTSecureDesktop.Services
             return list.Count;
         }
 
+        // Public helper to get list of pending question IDs (soalId) for offline preview indicator
+        public async Task<List<long>> GetPendingSoalIdsAsync()
+        {
+            var list = await ReadPendingAsync();
+            return list.Where(p => p.Type == PendingEntryType.SingleAnswer || p.Type == PendingEntryType.MultipleAnswers)
+                       .Select(p => p.SoalId)
+                       .Distinct()
+                       .ToList();
+        }
+
         // Public trigger to request an immediate flush
         public Task TriggerFlushAsync()
         {
@@ -351,6 +361,26 @@ namespace CBTSecureDesktop.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Save answer error: {ex.Message}");
+                // On exception, also enqueue pending so user doesn't lose work
+                try
+                {
+                    var question = _currentExamQuestions.FirstOrDefault(q => q.QuestionNumber == questionNumber);
+                    if (question != null && !question.IsMultiAnswer && answerIndex >= 0 && answerIndex < question.OptionIds.Count)
+                    {
+                        long opsiJawabanId = question.OptionIds[answerIndex];
+                        var entry = new PendingAnswer
+                        {
+                            Type = PendingEntryType.SingleAnswer,
+                            UjianId = _currentUjianId,
+                            MahasiswaId = _currentMahasiswaId,
+                            SoalId = question.SoalId,
+                            OpsiJawabanId = opsiJawabanId
+                        };
+                        await EnqueuePendingAsync(entry);
+                        return true;
+                    }
+                }
+                catch { }
                 return false;
             }
         }
@@ -397,6 +427,30 @@ namespace CBTSecureDesktop.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Save answers error: {ex.Message}");
+                // On exception, also enqueue pending so user doesn't lose work
+                try
+                {
+                    var question = _currentExamQuestions.FirstOrDefault(q => q.QuestionNumber == questionNumber);
+                    if (question != null && question.IsMultiAnswer)
+                    {
+                        var opsiJawabanIds = answerIndices.Where(i => i >= 0 && i < question.OptionIds.Count)
+                                                          .Select(i => question.OptionIds[i]).ToList();
+                        if (opsiJawabanIds.Count > 0)
+                        {
+                            var entry = new PendingAnswer
+                            {
+                                Type = PendingEntryType.MultipleAnswers,
+                                UjianId = _currentUjianId,
+                                MahasiswaId = _currentMahasiswaId,
+                                SoalId = question.SoalId,
+                                OpsiJawabanIds = opsiJawabanIds
+                            };
+                            await EnqueuePendingAsync(entry);
+                            return true;
+                        }
+                    }
+                }
+                catch { }
                 return false;
             }
         }
