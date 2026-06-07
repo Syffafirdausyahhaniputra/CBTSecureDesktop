@@ -17,20 +17,30 @@ namespace CBTSecureDesktop.Security
 
         public ProcessMonitorService()
         {
-            // Default forbidden processes (without .exe extension as ProcessName usually excludes it)
+            // Daftar hitam proses aplikasi terlarang demi menjaga integritas Secure CBT
+            // StringComparer.OrdinalIgnoreCase memastikan deteksi kebal dari variasi huruf besar/kecil
             _forbiddenProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "chrome",
-                "msedge",
-                "firefox",
-                "obs64",
-                "discord",
-                "taskmgr"
-                // "cmd",         // Dinonaktifkan sementara untuk pengujian lokal
-                // "powershell"   // Dinonaktifkan sementara untuk pengujian lokal
+                // 1. Web Browsers (Mencegah pencarian jawaban / kecurangan materi)
+                "chrome", "msedge", "firefox", "opera", "brave", "vivaldi", "safari",
+
+                // 2. Remote Desktop & Screen Sharing (Mencegah kendali joki ujian dari luar)
+                "TeamViewer", "AnyDesk", "RustDesk", "UltraViewer_Service", "UltraViewer", "mstsc",
+
+                // 3. Screen Recording & Streaming (Mencegah pencurian dan kebocoran bank soal)
+                "obs64", "obs32", "ShareX", "Streamlabs OBS", "bdcam", "fraps", "action",
+
+                // 4. Communication & Chat Apps (Mencegah koordinasi/diskusi antar mahasiswa)
+                "discord", "Telegram", "WhatsApp", "slack", "Teams", "zoom",
+
+                // 5. Virtualization Software (Mencegah bypass Kiosk Mode melalui OS Virtual/Sandbox)
+                "VirtualBox", "vmware", "vboxservice", "vmdkloop", "vpxclient",
+
+                // 6. Windows System Utilities (Mencegah mahasiswa mematikan paksa proses sistem CBT)
+                "taskmgr", "cmd", "powershell", "mmc", "regedit"
             };
 
-            // Setup log file path in the application directory
+            // Inisialisasi folder penyimpanan berkas log keamanan di AppData lokal mahasiswa
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var appFolder = Path.Combine(appDataPath, "CBTSecureDesktop");
             if (!Directory.Exists(appFolder))
@@ -41,9 +51,9 @@ namespace CBTSecureDesktop.Security
         }
 
         /// <summary>
-        /// Starts background monitoring of running processes.
+        /// Memulai pemantauan background thread untuk memeriksa proses yang sedang berjalan.
         /// </summary>
-        /// <param name="onViolationDetected">Optional callback when a violation is detected.</param>
+        /// <param name="onViolationDetected">Callback opsional untuk mengirimkan nama proses ilegal ke UI ExamWindow.</param>
         public void StartMonitoring(Action<string>? onViolationDetected = null)
         {
             if (_isRunning) return;
@@ -51,14 +61,14 @@ namespace CBTSecureDesktop.Security
             _isRunning = true;
             _cancellationTokenSource = new CancellationTokenSource();
 
-            // Run on a background thread
+            // Menjalankan loop pemindaian di dalam background thread terpisah agar UI WPF tidak freeze
             Task.Run(() => MonitorLoopAsync(_cancellationTokenSource.Token, onViolationDetected), _cancellationTokenSource.Token);
 
             LogEvent("System Process Monitoring started.");
         }
 
         /// <summary>
-        /// Stops the background monitoring safely.
+        /// Menghentikan background monitoring secara aman saat sesi ujian berakhir resmi.
         /// </summary>
         public void StopMonitoring()
         {
@@ -72,48 +82,60 @@ namespace CBTSecureDesktop.Security
             LogEvent("System Process Monitoring stopped.");
         }
 
+        /// <summary>
+        /// Loop asinkronus yang berjalan berkala untuk memindai seluruh proses aktif di OS Windows.
+        /// </summary>
         private async Task MonitorLoopAsync(CancellationToken token, Action<string>? onViolationDetected)
         {
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    // Get all currently running processes
+                    // Menarik seluruh daftar objek proses yang sedang aktif di Windows kernel
                     var currentProcesses = Process.GetProcesses();
 
                     foreach (var process in currentProcesses)
                     {
                         try
                         {
+                            // Memeriksa apakah nama proses saat ini terdaftar di dalam HashSet _forbiddenProcesses
                             if (_forbiddenProcesses.Contains(process.ProcessName))
                             {
                                 string processName = process.ProcessName;
 
-                                // Option 1: Try to kill the process
                                 if (!process.HasExited)
                                 {
-                                    process.Kill();
+                                    try
+                                    {
+                                        // Langkah Pertama: Kill normal menggunakan standard .NET API
+                                        process.Kill();
+                                    }
+                                    catch (System.ComponentModel.Win32Exception)
+                                    {
+                                        // Langkah Cadangan (Fallback): Jika gagal karena hak akses admin, 
+                                        // eksekusi perintah TASKKILL OS secara paksa (/F) via CMD senyap
+                                        ForceKillViaOS(processName);
+                                    }
 
-                                    // Option 3: Log the violation
+                                    // Mencatat detail pelanggaran keamanan ke file log lokal teks
                                     LogViolation(processName);
 
-                                    // Option 2: Notify the UI/App via callback
+                                    // Mengirim sinyal nama aplikasi pelanggar ke UI ExamWindow untuk memicu sanksi/warning
                                     onViolationDetected?.Invoke(processName);
                                 }
                             }
                         }
                         catch (System.ComponentModel.Win32Exception)
                         {
-                            // Occurs if the process is elevated (admin) and our app is not elevated.
-                            // We might not be able to interact with or kill it.
+                            // Terjadi jika proses berjalan dalam mode elevated (admin) sedangkan aplikasi CBT tidak berjalan sebagai admin.
                         }
                         catch (InvalidOperationException)
                         {
-                            // The process has already exited.
+                            // Mengantisipasi jika proses target sudah ditutup sendiri oleh sistem/user sebelum dieksekusi.
                         }
                         finally
                         {
-                            // Release resources associated with the process component
+                            // Melepaskan alokasi memori komponen handler proses untuk mencegah memory leak di laptop mahasiswa
                             process.Dispose();
                         }
                     }
@@ -125,13 +147,39 @@ namespace CBTSecureDesktop.Security
 
                 try
                 {
-                    // Wait 1-2 seconds before next scan to keep CPU usage low
+                    // Menunda pemindaian selama 1.5 detik sebelum scan berikutnya demi menjaga penggunaan CPU laptop tetap rendah
                     await Task.Delay(1500, token);
                 }
                 catch (TaskCanceledException)
                 {
-                    // Ignore expected exception on cancellation
+                    // Mengabaikan exception normal saat token pembatalan (StopMonitoring) dipicu
                 }
+            }
+        }
+
+        /// <summary>
+        /// Mekanisme Fallback paksa menggunakan taskkill Windows untuk melumpuhkan aplikasi keras kepala (Service SYSTEM).
+        /// </summary>
+        private void ForceKillViaOS(string processName)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "taskkill",
+                    Arguments = $"/F /IM {processName}.exe",
+                    CreateNoWindow = true, // Berjalan senyap di latar belakang tanpa memunculkan kotak hitam CMD
+                    UseShellExecute = false
+                };
+
+                using (var p = Process.Start(psi))
+                {
+                    p?.WaitForExit(1000); // Menunggu eksekusi OS maksimal 1 detik
+                }
+            }
+            catch (Exception ex)
+            {
+                LogEvent($"Gagal mengeksekusi OS taskkill untuk {processName}: {ex.Message}");
             }
         }
 

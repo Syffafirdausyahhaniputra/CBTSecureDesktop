@@ -24,6 +24,7 @@ namespace CBTSecureDesktop.Services
         public int? SelectedAnswer { get; set; }
         public List<int> SelectedAnswers { get; set; } = new();
         public bool IsMultiAnswer { get; set; } = false;
+        public bool IsDoubtful { get; set; } = false;
         public List<string> Images { get; set; } = new();
     }
 
@@ -40,7 +41,9 @@ namespace CBTSecureDesktop.Services
 
         // Pending queue file and sync controls
         private readonly string _pendingFilePath;
+        private readonly string _appDataDirectory;
         private readonly SemaphoreSlim _pendingLock = new(1,1);
+        private readonly SemaphoreSlim _doubtLock = new(1,1);
         private readonly TimeSpan _flushInterval = TimeSpan.FromSeconds(30);
         private CancellationTokenSource? _flushCts;
 
@@ -52,9 +55,9 @@ namespace CBTSecureDesktop.Services
             _databaseService = new DatabaseService();
 
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var dir = Path.Combine(appData, "CBTSecureDesktop");
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            _pendingFilePath = Path.Combine(dir, "PendingAnswers.json");
+            _appDataDirectory = Path.Combine(appData, "CBTSecureDesktop");
+            if (!Directory.Exists(_appDataDirectory)) Directory.CreateDirectory(_appDataDirectory);
+            _pendingFilePath = Path.Combine(_appDataDirectory, "PendingAnswers.json");
 
             // Start background flush loop
             _flushCts = new CancellationTokenSource();
@@ -292,6 +295,15 @@ namespace CBTSecureDesktop.Services
                 }
             }
 
+            var localDoubtStates = await ReadDoubtStatesAsync(ujianId, mahasiswaId);
+            foreach (var question in examQuestions)
+            {
+                if (localDoubtStates.TryGetValue(question.SoalId, out var isDoubtful))
+                {
+                    question.IsDoubtful = isDoubtful;
+                }
+            }
+
             return examQuestions;
         }
 
@@ -496,6 +508,97 @@ namespace CBTSecureDesktop.Services
         /// Gets the current exam questions.
         /// </summary>
         public List<ExamQuestion> GetCurrentQuestions() => _currentExamQuestions;
+
+        public async Task SaveDoubtStateAsync(long soalId, bool isDoubtful)
+        {
+            if (_currentUjianId <= 0 || _currentMahasiswaId <= 0 || soalId <= 0)
+            {
+                return;
+            }
+
+            await _doubtLock.WaitAsync();
+            try
+            {
+                var states = await ReadDoubtStatesAsync(_currentUjianId, _currentMahasiswaId);
+
+                if (isDoubtful)
+                {
+                    states[soalId] = true;
+                }
+                else
+                {
+                    states.Remove(soalId);
+                }
+
+                await WriteDoubtStatesAsync(_currentUjianId, _currentMahasiswaId, states);
+            }
+            finally
+            {
+                _doubtLock.Release();
+            }
+        }
+
+        public async Task ClearDoubtStatesAsync(long ujianId, long mahasiswaId)
+        {
+            if (ujianId <= 0 || mahasiswaId <= 0)
+            {
+                return;
+            }
+
+            await _doubtLock.WaitAsync();
+            try
+            {
+                var path = GetDoubtStateFilePath(ujianId, mahasiswaId);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            finally
+            {
+                _doubtLock.Release();
+            }
+        }
+
+        private string GetDoubtStateFilePath(long ujianId, long mahasiswaId)
+        {
+            return Path.Combine(_appDataDirectory, $"DoubtStates_{ujianId}_{mahasiswaId}.json");
+        }
+
+        private async Task<Dictionary<long, bool>> ReadDoubtStatesAsync(long ujianId, long mahasiswaId)
+        {
+            var path = GetDoubtStateFilePath(ujianId, mahasiswaId);
+            if (!File.Exists(path))
+            {
+                return new Dictionary<long, bool>();
+            }
+
+            try
+            {
+                var json = await File.ReadAllTextAsync(path);
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    return new Dictionary<long, bool>();
+                }
+
+                var states = JsonSerializer.Deserialize<Dictionary<long, bool>>(json);
+                return states ?? new Dictionary<long, bool>();
+            }
+            catch
+            {
+                return new Dictionary<long, bool>();
+            }
+        }
+
+        private async Task WriteDoubtStatesAsync(long ujianId, long mahasiswaId, Dictionary<long, bool> states)
+        {
+            var path = GetDoubtStateFilePath(ujianId, mahasiswaId);
+            var tempPath = path + ".tmp";
+
+            var json = JsonSerializer.Serialize(states);
+            await File.WriteAllTextAsync(tempPath, json);
+            File.Move(tempPath, path, true);
+        }
 
         // -------------------- Pending Queue Helpers --------------------
         private async Task EnqueuePendingAsync(PendingAnswer entry)

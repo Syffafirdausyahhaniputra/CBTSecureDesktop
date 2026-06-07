@@ -326,6 +326,7 @@ namespace CBTSecureDesktop.UI
             QuestionNumberText.Text = $"Pertanyaan {question.QuestionNumber}";
             QuestionText.Text = HtmlHelper.ConvertToPlainText(question.QuestionText);
             QuestionCountText.Text = $"Soal {index + 1} dari {_questions.Count}";
+            UpdateDoubtToggleButtonState();
 
             ImageRefreshStatusText.Text = string.Empty;
             ImageRefreshStatusText.Visibility = Visibility.Collapsed;
@@ -361,8 +362,7 @@ namespace CBTSecureDesktop.UI
             }
 
             // Update progress
-            int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue);
-            ProgressText.Text = $"Progress: {answeredCount}/{_questions.Count} Dijawab";
+            UpdateProgressText();
 
             // Clear and rebuild options
             OptionsPanel.Children.Clear();
@@ -591,9 +591,7 @@ namespace CBTSecureDesktop.UI
 
         private async void UpdateProgressAndSaveMulti()
         {
-            int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue || (q.IsMultiAnswer && q.SelectedAnswers.Count > 0));
-            ProgressText.Text = $"Progress: {answeredCount}/{_questions.Count} Dijawab";
-
+            UpdateProgressText();
             UpdateNavPanelHighlight();
 
             await _examService.SaveAnswersAsync(_questions[_currentQuestionIndex].QuestionNumber, _questions[_currentQuestionIndex].SelectedAnswers);
@@ -607,8 +605,7 @@ namespace CBTSecureDesktop.UI
                 _questions[_currentQuestionIndex].SelectedAnswer = answerIndex;
 
                 // Update progress
-                int answeredCount = _questions.Count(q => q.SelectedAnswer.HasValue || (q.IsMultiAnswer && q.SelectedAnswers.Count > 0));
-                ProgressText.Text = $"Progress: {answeredCount}/{_questions.Count} Dijawab";
+                UpdateProgressText();
 
                 // Update nav panel
                 UpdateNavPanelHighlight();
@@ -778,6 +775,99 @@ namespace CBTSecureDesktop.UI
             }
         }
 
+        private static bool IsQuestionAnswered(ExamQuestion question)
+        {
+            return (!question.IsMultiAnswer && question.SelectedAnswer.HasValue)
+                || (question.IsMultiAnswer && question.SelectedAnswers.Count > 0);
+        }
+
+        private void UpdateProgressText()
+        {
+            int answeredCount = _questions.Count(IsQuestionAnswered);
+            int doubtfulCount = _questions.Count(q => q.IsDoubtful);
+            ProgressText.Text = $"Progress: {answeredCount}/{_questions.Count} Dijawab • Ragu: {doubtfulCount}";
+        }
+
+        private void UpdateDoubtToggleButtonState()
+        {
+            if (DoubtToggleButton == null || _questions.Count == 0 || _currentQuestionIndex < 0 || _currentQuestionIndex >= _questions.Count)
+            {
+                return;
+            }
+
+            bool isDoubtful = _questions[_currentQuestionIndex].IsDoubtful;
+            DoubtToggleButton.Content = isDoubtful ? "☑ Ragu-ragu" : "☐ Ragu-ragu";
+
+            if (isDoubtful)
+            {
+                DoubtToggleButton.Background = new SolidColorBrush(Color.FromRgb(254, 243, 199));
+                DoubtToggleButton.Foreground = new SolidColorBrush(Color.FromRgb(146, 64, 14));
+                DoubtToggleButton.BorderBrush = new SolidColorBrush(Color.FromRgb(217, 119, 6));
+                DoubtToggleButton.BorderThickness = new Thickness(2);
+            }
+            else
+            {
+                DoubtToggleButton.Background = new SolidColorBrush(Color.FromRgb(248, 250, 252));
+                DoubtToggleButton.Foreground = new SolidColorBrush(Color.FromRgb(30, 58, 138));
+                DoubtToggleButton.BorderBrush = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+                DoubtToggleButton.BorderThickness = new Thickness(1.5);
+            }
+        }
+
+        private async void DoubtToggleButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_questions.Count == 0 || _currentQuestionIndex < 0 || _currentQuestionIndex >= _questions.Count)
+            {
+                return;
+            }
+
+            var currentQuestion = _questions[_currentQuestionIndex];
+            currentQuestion.IsDoubtful = !currentQuestion.IsDoubtful;
+
+            UpdateDoubtToggleButtonState();
+            UpdateProgressText();
+            UpdateNavPanelHighlight();
+
+            await _examService.SaveDoubtStateAsync(currentQuestion.SoalId, currentQuestion.IsDoubtful);
+            await EnsureCurrentQuestionAnswerPersistedAsync(currentQuestion);
+        }
+
+        private async Task EnsureCurrentQuestionAnswerPersistedAsync(ExamQuestion question)
+        {
+            if (question.IsMultiAnswer)
+            {
+                if (question.SelectedAnswers.Count > 0)
+                {
+                    await _examService.SaveAnswersAsync(question.QuestionNumber, question.SelectedAnswers.ToList());
+                }
+
+                return;
+            }
+
+            if (question.SelectedAnswer.HasValue)
+            {
+                await _examService.SaveAnswerAsync(question.QuestionNumber, question.SelectedAnswer.Value);
+            }
+        }
+
+        private Dictionary<long, bool> CaptureDoubtStateBySoalId()
+        {
+            return _questions
+                .GroupBy(q => q.SoalId)
+                .ToDictionary(g => g.Key, g => g.First().IsDoubtful);
+        }
+
+        private static void RestoreDoubtStateBySoalId(Dictionary<long, bool> doubtState, List<ExamQuestion> refreshedQuestions)
+        {
+            foreach (var question in refreshedQuestions)
+            {
+                if (doubtState.TryGetValue(question.SoalId, out var isDoubtful))
+                {
+                    question.IsDoubtful = isDoubtful;
+                }
+            }
+        }
+
         private Dictionary<long, List<long>> CaptureAnswerStateBySoalId()
         {
             var answerState = new Dictionary<long, List<long>>();
@@ -848,6 +938,7 @@ namespace CBTSecureDesktop.UI
             try
             {
                 var localAnswerState = CaptureAnswerStateBySoalId();
+                var localDoubtState = CaptureDoubtStateBySoalId();
                 long? currentSoalId = _questions.Count > 0 && _currentQuestionIndex >= 0 && _currentQuestionIndex < _questions.Count
                     ? _questions[_currentQuestionIndex].SoalId
                     : null;
@@ -857,6 +948,7 @@ namespace CBTSecureDesktop.UI
                 if (refreshedQuestions.Count > 0)
                 {
                     RestoreAnswerStateBySoalId(localAnswerState, refreshedQuestions);
+                    RestoreDoubtStateBySoalId(localDoubtState, refreshedQuestions);
                     _questions = refreshedQuestions;
 
                     int targetIndex = 0;
@@ -897,7 +989,8 @@ namespace CBTSecureDesktop.UI
             {
                 if (QuestionNavPanel.Children[i] is Button btn)
                 {
-                    bool isAnswered = _questions[i].SelectedAnswer.HasValue || (_questions[i].IsMultiAnswer && _questions[i].SelectedAnswers.Count > 0);
+                    bool isAnswered = IsQuestionAnswered(_questions[i]);
+                    bool isDoubtful = _questions[i].IsDoubtful;
                     bool isCurrent = i == _currentQuestionIndex;
 
                     if (isCurrent)
@@ -906,6 +999,12 @@ namespace CBTSecureDesktop.UI
                         btn.Foreground = new SolidColorBrush(Color.FromRgb(30, 58, 138)); // PolinemaBluePrimary
                         btn.BorderBrush = new SolidColorBrush(Color.FromRgb(30, 58, 138));
                         btn.BorderThickness = new Thickness(2);
+                    }
+                    else if (isDoubtful)
+                    {
+                        btn.Background = new SolidColorBrush(Color.FromRgb(249, 115, 22)); // Orange for doubtful
+                        btn.Foreground = new SolidColorBrush(Color.FromRgb(255, 255, 255));
+                        btn.BorderThickness = new Thickness(0);
                     }
                     else if (isAnswered)
                     {
@@ -924,34 +1023,218 @@ namespace CBTSecureDesktop.UI
             }
         }
 
+        private bool ShowSubmitPreviewDialog()
+        {
+            var answeredConfident = _questions
+                .Select((q, index) => new { q, index })
+                .Where(x => IsQuestionAnswered(x.q) && !x.q.IsDoubtful)
+                .Select(x => x.index)
+                .ToList();
+
+            var doubtful = _questions
+                .Select((q, index) => new { q, index })
+                .Where(x => x.q.IsDoubtful)
+                .Select(x => x.index)
+                .ToList();
+
+            var unanswered = _questions
+                .Select((q, index) => new { q, index })
+                .Where(x => !IsQuestionAnswered(x.q))
+                .Select(x => x.index)
+                .ToList();
+
+            var dialog = new Window
+            {
+                Title = "Preview Sebelum Submit",
+                Width = 760,
+                Height = 620,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                WindowStyle = WindowStyle.ToolWindow,
+                ResizeMode = ResizeMode.NoResize,
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252))
+            };
+
+            var root = new Grid { Margin = new Thickness(20) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var titlePanel = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
+            titlePanel.Children.Add(new TextBlock
+            {
+                Text = "Ringkasan Jawaban Sebelum Submit",
+                FontSize = 20,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(30, 58, 138))
+            });
+            titlePanel.Children.Add(new TextBlock
+            {
+                Text = $"Yakin: {answeredConfident.Count} • Ragu-ragu: {doubtful.Count} • Belum dijawab: {unanswered.Count}",
+                Margin = new Thickness(0, 6, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99))
+            });
+            Grid.SetRow(titlePanel, 0);
+            root.Children.Add(titlePanel);
+
+            var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            var sections = new StackPanel();
+
+            StackPanel CreateSection(string sectionTitle, Color headerColor, List<int> indexes, Brush buttonBackground, Brush buttonForeground, Brush buttonBorder)
+            {
+                var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
+
+                panel.Children.Add(new TextBlock
+                {
+                    Text = sectionTitle,
+                    FontSize = 15,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(headerColor),
+                    Margin = new Thickness(0, 0, 0, 8)
+                });
+
+                if (indexes.Count == 0)
+                {
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = "Tidak ada soal pada kategori ini.",
+                        Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                        FontStyle = FontStyles.Italic,
+                        Margin = new Thickness(0, 0, 0, 6)
+                    });
+                    return panel;
+                }
+
+                var wrap = new WrapPanel();
+                foreach (var index in indexes)
+                {
+                    var questionNumber = _questions[index].QuestionNumber;
+                    var btn = new Button
+                    {
+                        Content = $"Soal {questionNumber}",
+                        Margin = new Thickness(0, 0, 8, 8),
+                        Padding = new Thickness(12, 8, 12, 8),
+                        Tag = index,
+                        Background = buttonBackground,
+                        Foreground = buttonForeground,
+                        BorderBrush = buttonBorder,
+                        BorderThickness = new Thickness(1),
+                        FontWeight = FontWeights.SemiBold,
+                        Cursor = Cursors.Hand
+                    };
+
+                    btn.Click += (_, __) =>
+                    {
+                        DisplayQuestion((int)btn.Tag);
+                        dialog.DialogResult = false;
+                        dialog.Close();
+                    };
+
+                    wrap.Children.Add(btn);
+                }
+
+                panel.Children.Add(wrap);
+                return panel;
+            }
+
+            sections.Children.Add(CreateSection(
+                "✅ Soal Terjawab Yakin",
+                Color.FromRgb(22, 101, 52),
+                answeredConfident,
+                new SolidColorBrush(Color.FromRgb(34, 197, 94)),
+                Brushes.White,
+                new SolidColorBrush(Color.FromRgb(22, 101, 52))));
+
+            sections.Children.Add(CreateSection(
+                "🤔 Soal Ditandai Ragu-ragu",
+                Color.FromRgb(161, 98, 7),
+                doubtful,
+                new SolidColorBrush(Color.FromRgb(250, 204, 21)),
+                new SolidColorBrush(Color.FromRgb(30, 58, 138)),
+                new SolidColorBrush(Color.FromRgb(161, 98, 7))));
+
+            sections.Children.Add(CreateSection(
+                "❗ Soal Belum Dijawab",
+                Color.FromRgb(185, 28, 28),
+                unanswered,
+                new SolidColorBrush(Color.FromRgb(220, 38, 38)),
+                Brushes.White,
+                new SolidColorBrush(Color.FromRgb(153, 27, 27))));
+
+            scroll.Content = sections;
+            Grid.SetRow(scroll, 1);
+            root.Children.Add(scroll);
+
+            var footer = new Grid { Margin = new Thickness(0, 10, 0, 0) };
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var noteText = new TextBlock
+            {
+                Text = "Klik soal untuk langsung pindah ke soal tersebut.",
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(noteText, 0);
+            footer.Children.Add(noteText);
+
+            var backButton = new Button
+            {
+                Content = "Kembali ke Ujian",
+                Style = (Style)FindResource("PolinemaButtonSecondary"),
+                Padding = new Thickness(14, 9, 14, 9),
+                Margin = new Thickness(0, 0, 10, 0)
+            };
+            backButton.Click += (_, __) =>
+            {
+                dialog.DialogResult = false;
+                dialog.Close();
+            };
+            Grid.SetColumn(backButton, 1);
+            footer.Children.Add(backButton);
+
+            var continueButton = new Button
+            {
+                Content = "Lanjutkan Submit",
+                Style = (Style)FindResource("PolinemaButtonPrimary"),
+                Padding = new Thickness(14, 9, 14, 9)
+            };
+            continueButton.Click += (_, __) =>
+            {
+                dialog.DialogResult = true;
+                dialog.Close();
+            };
+            Grid.SetColumn(continueButton, 2);
+            footer.Children.Add(continueButton);
+
+            Grid.SetRow(footer, 2);
+            root.Children.Add(footer);
+
+            dialog.Content = root;
+            return dialog.ShowDialog() == true;
+        }
+
         private async void SubmitButton_Click(object sender, RoutedEventArgs e)
         {
-            // Check if all questions are answered
-            var unanswered = _questions.Count(q => (!q.IsMultiAnswer && q.SelectedAnswer == null) || (q.IsMultiAnswer && q.SelectedAnswers.Count == 0));
-
-            if (unanswered > 0)
+            if (!ShowSubmitPreviewDialog())
             {
-                var result = MessageBox.Show(
-                    $"Anda memiliki {unanswered} soal yang belum dijawab.\n\n" +
-                    "Apakah Anda tetap ingin mengirim ujian?",
-                    "Konfirmasi Pengiriman",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Question);
-
-                if (result == MessageBoxResult.No)
-                    return;
+                return;
             }
-            else
-            {
-                var result = MessageBox.Show(
-                    "Apakah Anda yakin ingin mengirim jawaban ujian?\n\n" +
-                    "Anda tidak dapat mengubah jawaban setelah dikirim.",
-                    "Konfirmasi Pengiriman",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
 
-                if (result == MessageBoxResult.No)
-                    return;
+            var unanswered = _questions.Count(q => !IsQuestionAnswered(q));
+            var doubtful = _questions.Count(q => q.IsDoubtful);
+
+            var result = MessageBox.Show(
+                $"Ringkasan sebelum submit:\n- Belum dijawab: {unanswered}\n- Ditandai ragu-ragu: {doubtful}\n\n" +
+                "Apakah Anda yakin ingin mengirim jawaban ujian?\nAnda tidak dapat mengubah jawaban setelah dikirim.",
+                "Konfirmasi Pengiriman",
+                MessageBoxButton.YesNo,
+                unanswered > 0 || doubtful > 0 ? MessageBoxImage.Question : MessageBoxImage.Warning);
+
+            if (result == MessageBoxResult.No)
+            {
+                return;
             }
 
             // Stop timer
@@ -969,6 +1252,8 @@ namespace CBTSecureDesktop.UI
 
                 if (success)
                 {
+                    await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
+
                     // Keep the feedback minimal: only show that exam is finished
                     string message = "Ujian berhasil dikirim!\n\nStatus: Selesai." +
                                      $"\nWaktu pengerjaan: {_elapsedSeconds / 60} menit {_elapsedSeconds % 60} detik";
@@ -1039,6 +1324,7 @@ namespace CBTSecureDesktop.UI
 
                     // Secara siluman kumpulkan poinnya ke database dengan status dihentikan
                     await _examService.CalculateAndSaveForceStopScoreAsync(_ujianId, _mahasiswaId);
+                    await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
 
                     MessageBox.Show("Ujian Anda telah dihentikan secara paksa oleh Admin/Pengawas.\n\n" +
                                     "Segala jawaban yang telah terisi telah dikumpulkan dan diakumulasikan.",

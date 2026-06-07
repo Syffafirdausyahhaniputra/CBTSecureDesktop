@@ -4,6 +4,24 @@
         Title="CBT Polinema - Mode Ujian" 
         WindowState="Normal"
         Background="{StaticResource PolinemaLightGray}">
+    <Window.Resources>
+        <Style x:Key="RoundedPreviewTagButtonStyle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -153,7 +171,21 @@
                         <!-- Refresh Button -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                             <TextBlock x:Name="OfflineStatusText" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="DarkOrange" FontWeight="SemiBold" Visibility="Collapsed">Offline: jawaban disimpan sementara</TextBlock>
-                                                        <TextBlock x:Name="PendingCountText" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="White" FontWeight="Bold" Background="DarkRed" Padding="4,2" Visibility="Collapsed" Text="" ToolTip="Ada jawaban yang tersimpan lokal dan belum tersinkron. Sambungkan internet untuk mengirimnya ke server."/>
+                            <TextBlock x:Name="PendingCountText" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="White" FontWeight="Bold" Background="DarkRed" Padding="4,2" Visibility="Collapsed" Text="" ToolTip="Ada jawaban yang tersimpan lokal dan belum tersinkron. Sambungkan internet untuk mengirimnya ke server."/>
+                            <Button x:Name="DoubtToggleButton"
+                                    Style="{StaticResource RoundedPreviewTagButtonStyle}"
+                                    HorizontalAlignment="Right"
+                                    Content="☐ Ragu-ragu"
+                                    Background="#F8FAFC"
+                                    Foreground="#1E3A8A"
+                                    BorderBrush="#94A3B8"
+                                    BorderThickness="1.5"
+                                    Padding="14,8"
+                                    MinWidth="155"
+                                    FontSize="13"
+                                    FontWeight="SemiBold"
+                                    Margin="0,0,10,0"
+                                    Click="DoubtToggleButton_Click"/>
                             <Button x:Name="RefreshExamButton"
                                     HorizontalAlignment="Right"
                                     Content="🔄 Refresh Soal"
@@ -379,10 +411,10 @@
                        Click="SubmitButton_Click">
                     <Button.Effect>
                         <DropShadowEffect Color="{Binding Source={StaticResource PolinemaGreen}, Path=Color}" 
-                                         Direction="270" 
-                                         ShadowDepth="0" 
-                                         Opacity="0.4" 
-                                         BlurRadius="15"/>
+                            Direction="270" 
+                            ShadowDepth="0" 
+                            Opacity="0.4" 
+                            BlurRadius="15"/>
                     </Button.Effect>
                 </Button>
             </Grid>
