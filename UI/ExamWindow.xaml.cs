@@ -574,8 +574,12 @@ namespace CBTSecureDesktop.UI
                         Stretch = Stretch.Uniform,
                         MaxHeight = 180,
                         HorizontalAlignment = HorizontalAlignment.Left,
-                        Margin = new Thickness(0, 0, 0, 8)
+                        Margin = new Thickness(0, 0, 0, 8),
+                        Cursor = Cursors.Hand,
+                        ToolTip = "Klik gambar untuk memperbesar"
                     };
+
+                    image.PreviewMouseLeftButtonDown += OptionImage_PreviewMouseLeftButtonDown;
 
                     if (string.IsNullOrWhiteSpace(optionText))
                     {
@@ -610,6 +614,73 @@ namespace CBTSecureDesktop.UI
                 Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)),
                 FontSize = 16
             };
+        }
+
+        private void OptionImage_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+
+            if (sender is Image image && image.Source is not null)
+            {
+                ShowOptionImagePopup(image.Source);
+            }
+        }
+
+        private void ShowOptionImagePopup(ImageSource imageSource)
+        {
+            var popupWindow = new Window
+            {
+                Title = "Preview Gambar Opsi",
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Width = 900,
+                Height = 700,
+                MinWidth = 600,
+                MinHeight = 450,
+                Background = new SolidColorBrush(Color.FromRgb(15, 23, 42))
+            };
+
+            var root = new Grid
+            {
+                Margin = new Thickness(14)
+            };
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var image = new Image
+            {
+                Source = imageSource,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var scrollViewer = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = image,
+                Background = new SolidColorBrush(Color.FromRgb(15, 23, 42))
+            };
+
+            Grid.SetRow(scrollViewer, 0);
+            root.Children.Add(scrollViewer);
+
+            var closeButton = new Button
+            {
+                Content = "Tutup",
+                Width = 100,
+                Margin = new Thickness(0, 12, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Style = (Style)FindResource("PolinemaButtonSecondary")
+            };
+            closeButton.Click += (_, _) => popupWindow.Close();
+
+            Grid.SetRow(closeButton, 1);
+            root.Children.Add(closeButton);
+
+            popupWindow.Content = root;
+            popupWindow.ShowDialog();
         }
 
         private async void UpdateProgressAndSaveMulti()
