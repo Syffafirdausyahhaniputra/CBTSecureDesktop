@@ -50,6 +50,16 @@ namespace CBTSecureDesktop.Services
         // Pending notifications
         public event Action<int>? PendingCountChanged;
 
+        // State-Reconciliation: check throttle — avoids one SELECT per keystroke
+        private DateTime _lastDeviceCheckUtc = DateTime.MinValue;
+        private static readonly TimeSpan DeviceCheckInterval = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// Fires when a session takeover (Breach) is detected during an active exam.
+        /// The ExamWindow handler shows a warning and performs a forced logout.
+        /// </summary>
+        public event Action? SecurityBreachDetected;
+
         public ExamService()
         {
             _databaseService = new DatabaseService();
@@ -318,12 +328,38 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
+        /// State-Reconciliation: runs a device binding check against the DB when the throttle
+        /// window has expired (at most once every 30 s). Returns false and fires
+        /// SecurityBreachDetected if a different device is found in the database.
+        /// </summary>
+        private async Task<bool> PerformDeviceCheckIfDueAsync()
+        {
+            if (DateTime.UtcNow - _lastDeviceCheckUtc < DeviceCheckInterval)
+                return true; // Throttle: not due yet — skip DB roundtrip
+
+            _lastDeviceCheckUtc = DateTime.UtcNow;
+
+            var result = await _databaseService.ValidateAndReconcileDeviceAsync(_currentMahasiswaId);
+            if (result == DeviceCheckResult.Breach)
+            {
+                SecurityBreachDetected?.Invoke();
+                return false;
+            }
+
+            return true; // Safe or AutoRelocked — allow save to continue
+        }
+
+        /// <summary>
         /// Saves the student's answer for a specific question to database.
         /// </summary>
         public async Task<bool> SaveAnswerAsync(int questionNumber, int answerIndex)
         {
             try
             {
+                // --- State-Reconciliation: validate device binding before writing ---
+                if (!await PerformDeviceCheckIfDueAsync())
+                    return false; // Breach detected — SecurityBreachDetected already fired
+
                 var question = _currentExamQuestions.FirstOrDefault(q => q.QuestionNumber == questionNumber);
                 if (question != null && !question.IsMultiAnswer && answerIndex >= 0 && answerIndex < question.OptionIds.Count)
                 {
@@ -392,6 +428,10 @@ namespace CBTSecureDesktop.Services
         {
             try
             {
+                // --- State-Reconciliation: validate device binding before writing ---
+                if (!await PerformDeviceCheckIfDueAsync())
+                    return false; // Breach detected — SecurityBreachDetected already fired
+
                 var question = _currentExamQuestions.FirstOrDefault(q => q.QuestionNumber == questionNumber);
                 if (question != null && question.IsMultiAnswer)
                 {
@@ -520,6 +560,49 @@ namespace CBTSecureDesktop.Services
                     Type = PendingEntryType.ForceStop,
                     UjianId = ujianId,
                     MahasiswaId = mahasiswaId
+                };
+                await EnqueuePendingAsync(entry);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Records a device-binding breach termination in t_ujian_mahasiswa:
+        /// sets status = 'dihentikan', stamps endtime, calculates and stores the final
+        /// score, and writes the breach reason into the keterangan column so admins can
+        /// see exactly why the session was terminated.
+        /// Falls back to the local pending queue if the DB write fails.
+        /// </summary>
+        public async Task<bool> TerminateForBreachAsync(long ujianId, long mahasiswaId)
+        {
+            string keterangan = $"Dihentikan otomatis oleh sistem: terdeteksi perangkat lain aktif " +
+                                $"pada akun mahasiswa saat ujian berlangsung " +
+                                $"(perangkat ujian: {Environment.MachineName})";
+            try
+            {
+                bool ok = await _databaseService.SaveBreachTerminationAsync(ujianId, mahasiswaId, keterangan);
+                if (!ok)
+                {
+                    var entry = new PendingAnswer
+                    {
+                        Type        = PendingEntryType.BreachTermination,
+                        UjianId     = ujianId,
+                        MahasiswaId = mahasiswaId,
+                        Keterangan  = keterangan
+                    };
+                    await EnqueuePendingAsync(entry);
+                }
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"TerminateForBreachAsync error: {ex.Message}");
+                var entry = new PendingAnswer
+                {
+                    Type        = PendingEntryType.BreachTermination,
+                    UjianId     = ujianId,
+                    MahasiswaId = mahasiswaId,
+                    Keterangan  = keterangan
                 };
                 await EnqueuePendingAsync(entry);
                 return false;
@@ -747,6 +830,12 @@ namespace CBTSecureDesktop.Services
                                 break;
                             case PendingEntryType.ForceStop:
                                 ok = await _databaseService.SaveForceStopExamAsync(entry.UjianId, entry.MahasiswaId);
+                                break;
+                            case PendingEntryType.BreachTermination:
+                                ok = await _databaseService.SaveBreachTerminationAsync(
+                                    entry.UjianId,
+                                    entry.MahasiswaId,
+                                    entry.Keterangan ?? "Dihentikan otomatis: pelanggaran keamanan sesi terdeteksi");
                                 break;
                         }
                     }

@@ -59,8 +59,8 @@ namespace CBTSecureDesktop.UI
 
             try
             {
-                // Authenticate
-                bool isAuthenticated = await _authService.AuthenticateAsync(studentId, password);
+                // Authenticate (with device binding for mahasiswa)
+                var (isAuthenticated, message) = await _authService.LoginAsync(studentId, password);
 
                 if (isAuthenticated)
                 {
@@ -73,7 +73,7 @@ namespace CBTSecureDesktop.UI
                 }
                 else
                 {
-                    ShowError("Username atau Password salah");
+                    ShowError(string.IsNullOrEmpty(message) ? "Username atau Password salah" : message);
                 }
             }
             catch (Exception ex)

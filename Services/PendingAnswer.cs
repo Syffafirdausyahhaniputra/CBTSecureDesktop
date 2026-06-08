@@ -8,7 +8,8 @@ namespace CBTSecureDesktop.Services
         SingleAnswer,
         MultipleAnswers,
         SubmitExam,
-        ForceStop
+        ForceStop,
+        BreachTermination  // auto-forced stop due to device-binding breach
     }
 
     public class PendingAnswer
@@ -22,6 +23,9 @@ namespace CBTSecureDesktop.Services
         public long SoalId { get; set; }
         public long? OpsiJawabanId { get; set; }
         public List<long>? OpsiJawabanIds { get; set; }
+
+        // For breach termination — stores the reason written to keterangan column
+        public string? Keterangan { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public int Attempts { get; set; } = 0;

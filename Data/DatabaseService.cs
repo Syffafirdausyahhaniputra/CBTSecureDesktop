@@ -5,6 +5,16 @@ using System.Data;
 namespace CBTSecureDesktop.Data
 {
     /// <summary>
+    /// Result of a per-save device binding validation (State-Reconciliation check).
+    /// </summary>
+    public enum DeviceCheckResult
+    {
+        Safe,         // active_device_id matches current machine — proceed normally
+        AutoRelocked, // was NULL (admin accidentally reset) — silently re-locked, proceed
+        Breach        // different device in DB — abort save and force logout
+    }
+
+    /// <summary>
     /// Provides database operations for the CBT application
     /// Uses Repository pattern for data access
     /// </summary>
@@ -64,6 +74,196 @@ namespace CBTSecureDesktop.Data
             {
                 System.Diagnostics.Debug.WriteLine($"Authentication error: {ex.Message}");
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Authenticates a mahasiswa and enforces Single Active Session (device binding).
+        /// Uses SELECT … FOR UPDATE inside a transaction to prevent TOCTOU race conditions.
+        /// Returns (Success, Message, User):
+        ///   Message == null  → user was not found as a mahasiswa (caller should try other auth paths)
+        ///   Message != null  → user exists; Success == false means wrong password or device conflict
+        /// </summary>
+        public async Task<(bool Success, string? Message, User? User)> LoginMahasiswaAsync(
+            string username, string password)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                using var transaction = await connection.BeginTransactionAsync();
+                try
+                {
+                    const string selectSql = @"
+                        SELECT user_id, mahasiswa_id, username, password, level, active_device_id
+                        FROM t_user
+                        WHERE username = @username AND level = 'mahasiswa'
+                        FOR UPDATE";
+
+                    using var cmd = new MySqlCommand(selectSql, connection, transaction);
+                    cmd.Parameters.AddWithValue("@username", username);
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    if (!await reader.ReadAsync())
+                    {
+                        await reader.CloseAsync();
+                        await transaction.RollbackAsync();
+                        return (false, null, null); // not a mahasiswa — caller falls back
+                    }
+
+                    var user = new User
+                    {
+                        UserId       = reader.GetInt64("user_id"),
+                        MahasiswaId  = reader.IsDBNull("mahasiswa_id") ? null : reader.GetInt64("mahasiswa_id"),
+                        Username     = reader.GetString("username"),
+                        Password     = reader.GetString("password"),
+                        Level        = reader.GetString("level"),
+                        ActiveDeviceId = reader.IsDBNull("active_device_id") ? null : reader.GetString("active_device_id")
+                    };
+                    await reader.CloseAsync();
+
+                    // --- Password verification ---
+                    if (!VerifyPassword(password, user.Password))
+                    {
+                        await transaction.RollbackAsync();
+                        return (false, "Username atau Password salah", null);
+                    }
+
+                    // --- Device binding check ---
+                    string currentDevice = Environment.MachineName;
+                    if (user.ActiveDeviceId != null &&
+                        !string.Equals(user.ActiveDeviceId, currentDevice, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await transaction.RollbackAsync();
+                        return (false, "Akun sedang digunakan di perangkat lain.", null);
+                    }
+
+                    // --- Bind this device (covers NULL and same-machine re-login after crash) ---
+                    const string updateSql = @"
+                        UPDATE t_user
+                        SET active_device_id = @deviceId
+                        WHERE username = @username2";
+
+                    using var updateCmd = new MySqlCommand(updateSql, connection, transaction);
+                    updateCmd.Parameters.AddWithValue("@deviceId",   currentDevice);
+                    updateCmd.Parameters.AddWithValue("@username2",  username);
+                    await updateCmd.ExecuteNonQueryAsync();
+
+                    await transaction.CommitAsync();
+
+                    user.ActiveDeviceId = currentDevice;
+                    return (true, string.Empty, user);
+                }
+                catch
+                {
+                    await transaction.RollbackAsync();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"LoginMahasiswaAsync error: {ex.Message}");
+                return (false, "Terjadi kesalahan saat login. Silakan coba lagi.", null);
+            }
+        }
+
+        /// <summary>
+        /// Releases the device binding for a mahasiswa on logout or exam completion,
+        /// so the account can be used from another machine afterwards.
+        /// </summary>
+        public async Task<bool> LogoutMahasiswaAsync(string username)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                const string sql = @"
+                    UPDATE t_user
+                    SET active_device_id = NULL
+                    WHERE username = @username AND level = 'mahasiswa'";
+
+                using var cmd = new MySqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@username", username);
+                await cmd.ExecuteNonQueryAsync();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"LogoutMahasiswaAsync error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// State-Reconciliation (Self-Healing) check called before every answer save.
+        /// Scenario A — active_device_id is NULL (admin accidentally reset): silently re-locks
+        ///              to the current machine and returns AutoRelocked so the save continues.
+        /// Scenario B — active_device_id is set to a DIFFERENT machine: returns Breach so the
+        ///              caller aborts the save and triggers a forced logout.
+        /// Scenario C — active_device_id matches the current machine: returns Safe.
+        /// On any DB/network error the method returns Safe to avoid interrupting the exam.
+        /// </summary>
+        public async Task<DeviceCheckResult> ValidateAndReconcileDeviceAsync(long mahasiswaId)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                const string selectSql = @"
+                    SELECT active_device_id
+                    FROM t_user
+                    WHERE mahasiswa_id = @mahasiswaId AND level = 'mahasiswa'";
+
+                using var selectCmd = new MySqlCommand(selectSql, connection);
+                selectCmd.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+
+                var rawResult = await selectCmd.ExecuteScalarAsync();
+
+                // No matching row — cannot validate; treat as safe so exam is not interrupted
+                if (rawResult == null)
+                    return DeviceCheckResult.Safe;
+
+                // Column value is SQL NULL → admin reset the binding
+                string? storedDevice = rawResult == DBNull.Value ? null : rawResult as string;
+                string currentDevice = Environment.MachineName;
+
+                // --- Scenario A: NULL → Auto Re-Lock silently ---
+                if (string.IsNullOrEmpty(storedDevice))
+                {
+                    const string relockSql = @"
+                        UPDATE t_user
+                        SET active_device_id = @deviceId
+                        WHERE mahasiswa_id = @mahasiswaId2 AND level = 'mahasiswa'";
+
+                    using var relockCmd = new MySqlCommand(relockSql, connection);
+                    relockCmd.Parameters.AddWithValue("@deviceId",    currentDevice);
+                    relockCmd.Parameters.AddWithValue("@mahasiswaId2", mahasiswaId);
+                    await relockCmd.ExecuteNonQueryAsync();
+
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[StateReconciliation] Auto Re-Lock: mahasiswaId={mahasiswaId}, device={currentDevice}");
+                    return DeviceCheckResult.AutoRelocked;
+                }
+
+                // --- Scenario B: different device → Breach ---
+                if (!string.Equals(storedDevice, currentDevice, StringComparison.OrdinalIgnoreCase))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[StateReconciliation] BREACH: stored={storedDevice}, current={currentDevice}, mahasiswaId={mahasiswaId}");
+                    return DeviceCheckResult.Breach;
+                }
+
+                // --- Scenario C: same device → Safe ---
+                return DeviceCheckResult.Safe;
+            }
+            catch (Exception ex)
+            {
+                // Do not interrupt the exam for transient DB/network errors
+                System.Diagnostics.Debug.WriteLine($"ValidateAndReconcileDeviceAsync error: {ex.Message}");
+                return DeviceCheckResult.Safe;
             }
         }
 
@@ -881,6 +1081,51 @@ namespace CBTSecureDesktop.Data
             {
                 System.Diagnostics.Debug.WriteLine($"Save force stop exam error: {ex.Message}");
                 // No message box here because it's called silently in the background
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Records an automatic breach-triggered termination in t_ujian_mahasiswa.
+        /// Unlike SaveForceStopExamAsync (which requires the admin to set status first),
+        /// this method sets status = 'dihentikan' itself, calculates the score, stamps
+        /// endtime, and writes the supplied breach reason into the keterangan column.
+        /// </summary>
+        public async Task<bool> SaveBreachTerminationAsync(long ujianId, long mahasiswaId, string keterangan)
+        {
+            try
+            {
+                using var connection = _dbConnection.GetConnection();
+                await connection.OpenAsync();
+
+                double score = await CalculateExamScoreAsync(connection, ujianId, mahasiswaId);
+
+                const string sql = @"
+                    UPDATE t_ujian_mahasiswa
+                    SET status      = 'dihentikan',
+                        endtime     = @endTime,
+                        nilai       = @nilai,
+                        keterangan  = @keterangan,
+                        updated_at  = NOW()
+                    WHERE ujian_id     = @ujianId
+                      AND mahasiswa_id = @mahasiswaId
+                      AND status       = 'dimulai'
+                    ORDER BY ujianmahasiswa_id DESC
+                    LIMIT 1";
+
+                using var cmd = new MySqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@endTime",    DateTime.Now);
+                cmd.Parameters.AddWithValue("@nilai",      score);
+                cmd.Parameters.AddWithValue("@keterangan", keterangan);
+                cmd.Parameters.AddWithValue("@ujianId",    ujianId);
+                cmd.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
+
+                int rowsAffected = await cmd.ExecuteNonQueryAsync();
+                return rowsAffected > 0;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SaveBreachTerminationAsync error: {ex.Message}");
                 return false;
             }
         }

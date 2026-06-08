@@ -11,6 +11,7 @@ namespace CBTSecureDesktop.Models
         public string Username { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty;
         public string Level { get; set; } = string.Empty; // mahasiswa, dosen, panitia
+        public string? ActiveDeviceId { get; set; }       // active_device_id column — device binding
         public DateTime? CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
     }

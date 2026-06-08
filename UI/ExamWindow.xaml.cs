@@ -76,6 +76,9 @@ namespace CBTSecureDesktop.UI
                 UpdatePendingStatusText(cnt);
             });
 
+            // State-Reconciliation: react to session-takeover breach detected during answer saves
+            _examService.SecurityBreachDetected += OnSecurityBreachDetected;
+
             // Initialize pending count immediately (non-blocking)
             _ = Task.Run(async () =>
             {
@@ -1936,6 +1939,36 @@ namespace CBTSecureDesktop.UI
             public BssType BssType { get; init; }
             public string DisplayText => $"{Ssid} ({SignalQuality}%)";
             public override string ToString() => DisplayText;
+        }
+
+        /// <summary>
+        /// Handles a State-Reconciliation breach: stops the exam, warns the student,
+        /// releases the device binding in the database, and returns to the login screen.
+        /// </summary>
+        private async void OnSecurityBreachDetected()
+        {
+            _timer.Stop();
+
+            // Silently record the forced termination in t_ujian_mahasiswa
+            // (status='dihentikan', endtime, nilai, keterangan) before notifying the student
+            await _examService.TerminateForBreachAsync(_ujianId, _mahasiswaId);
+            await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
+
+            MessageBox.Show(
+                "⚠️ PELANGGARAN KEAMANAN TERDETEKSI!\n\n" +
+                "Akun Anda terdeteksi aktif di perangkat lain.\n" +
+                "Semua jawaban yang telah terisi telah disimpan dan dinilai.\n\n" +
+                "Anda akan dikeluarkan dari ujian secara otomatis.",
+                "Sesi Tidak Valid",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            DeactivateSecurityMode();
+            await _authService.LogoutAsync();
+
+            var loginWindow = new LoginWindow();
+            loginWindow.Show();
+            this.Close();
         }
 
         private void ExamWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)

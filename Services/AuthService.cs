@@ -57,6 +57,54 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
+        /// Authenticates a user and enforces Single Active Session for mahasiswa.
+        /// For mahasiswa: verifies password + device binding in one atomic DB operation.
+        /// For dosen/panitia: falls back to standard authentication (no device binding).
+        /// </summary>
+        /// <returns>(Success, Message) — Message is shown directly in the UI on failure.</returns>
+        public async Task<(bool Success, string Message)> LoginAsync(string username, string password)
+        {
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+                return (false, "Masukkan Username dan Password Anda");
+
+            try
+            {
+                // --- Try mahasiswa path (includes device binding) ---
+                var (success, message, user) = await _databaseService.LoginMahasiswaAsync(username, password);
+
+                if (message != null) // user was found as mahasiswa (success OR explicit failure)
+                {
+                    if (!success)
+                        return (false, message);
+
+                    CurrentUser = user;
+                    CurrentStudentId = username;
+
+                    if (user!.MahasiswaId.HasValue)
+                        CurrentMahasiswa = await _databaseService.GetMahasiswaByIdAsync(user.MahasiswaId.Value);
+
+                    return (true, string.Empty);
+                }
+
+                // --- Fallback: dosen / panitia (no device binding) ---
+                var regularUser = await _databaseService.AuthenticateUserAsync(username, password);
+                if (regularUser != null)
+                {
+                    CurrentUser = regularUser;
+                    CurrentStudentId = username;
+                    return (true, string.Empty);
+                }
+
+                return (false, "Username atau Password salah");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"LoginAsync error: {ex.Message}");
+                return (false, "Terjadi kesalahan saat login. Silakan coba lagi.");
+            }
+        }
+
+        /// <summary>
         /// Gets the currently authenticated user.
         /// </summary>
         public User? CurrentUser { get; private set; }
@@ -97,13 +145,27 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
-        /// Logs out the current user.
+        /// Logs out the current user (synchronous, in-memory only).
+        /// Prefer LogoutAsync() when called from async contexts.
         /// </summary>
         public void Logout()
         {
             CurrentUser = null;
             CurrentMahasiswa = null;
             CurrentStudentId = null;
+        }
+
+        /// <summary>
+        /// Releases the device binding in the database (mahasiswa only), then clears in-memory state.
+        /// Always call this instead of Logout() when an await is available.
+        /// </summary>
+        public async Task LogoutAsync()
+        {
+            if (CurrentUser?.Level == "mahasiswa" && !string.IsNullOrEmpty(CurrentUser.Username))
+            {
+                await _databaseService.LogoutMahasiswaAsync(CurrentUser.Username);
+            }
+            Logout();
         }
     }
 }

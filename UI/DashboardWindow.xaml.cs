@@ -50,7 +50,7 @@ namespace CBTSecureDesktop.UI
             window.ShowDialog();
         }
 
-        private void LogoutButton_Click(object sender, RoutedEventArgs e)
+        private async void LogoutButton_Click(object sender, RoutedEventArgs e)
         {
             var result = MessageBox.Show(
                 "Apakah Anda yakin ingin keluar?",
@@ -60,7 +60,7 @@ namespace CBTSecureDesktop.UI
 
             if (result == MessageBoxResult.Yes)
             {
-                _authService.Logout();
+                await _authService.LogoutAsync();
                 var loginWindow = new LoginWindow();
                 loginWindow.Show();
                 this.Close();
