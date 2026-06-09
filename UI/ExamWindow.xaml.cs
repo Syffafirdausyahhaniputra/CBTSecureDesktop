@@ -68,31 +68,16 @@ namespace CBTSecureDesktop.UI
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += Timer_Tick;
 
-            // First: Subscribe to pending count changes immediately (before network check)
-            _examService.PendingCountChanged += cnt => Application.Current.Dispatcher.Invoke(() => 
+            _examService.PendingCountChanged += pendingCount =>
             {
-                PendingCountText.Text = cnt.ToString();
-                PendingCountBorder.Visibility = cnt > 0 ? Visibility.Visible : Visibility.Collapsed;
-                UpdatePendingStatusText(cnt);
-            });
+                Task pendingRefresh = RefreshPendingCountAsync();
+            };
 
             // State-Reconciliation: react to session-takeover breach detected during answer saves
             _examService.SecurityBreachDetected += OnSecurityBreachDetected;
 
-            // Initialize pending count immediately (non-blocking)
-            _ = Task.Run(async () =>
-            {
-                var initial = await _examService.GetPendingCountAsync();
-                if (initial > 0)
-                {
-                    Application.Current.Dispatcher.Invoke(() => 
-                    {
-                        PendingCountText.Text = initial.ToString();
-                        PendingCountBorder.Visibility = Visibility.Visible;
-                        UpdatePendingStatusText(initial);
-                    });
-                }
-            });
+            // Initialize pending count immediately for this exam session
+            Task initialPendingRefresh = RefreshPendingCountAsync();
 
             // Start immediate network monitoring to keep UI responsive
             // This loop runs independently and continuously checks network status
@@ -104,7 +89,7 @@ namespace CBTSecureDesktop.UI
                     try
                     {
                         // Quick network check (short timeout)
-                        var online = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId) != null;
+                        var online = await _examService.TestConnectionAsync();
 
                         // Always update _isOnline status (don't skip unchanged state)
                         _isOnline = online;
@@ -146,6 +131,23 @@ namespace CBTSecureDesktop.UI
 
             Loaded += ExamWindow_Loaded;
             Closing += ExamWindow_Closing;
+        }
+
+        private async Task RefreshPendingCountAsync()
+        {
+            try
+            {
+                var count = await _examService.GetPendingCountAsync(_ujianId, _mahasiswaId);
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    PendingCountText.Text = count.ToString();
+                    PendingCountBorder.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    UpdatePendingStatusText(count);
+                });
+            }
+            catch
+            {
+            }
         }
 
         private async void ExamWindow_Loaded(object sender, RoutedEventArgs e)
@@ -276,7 +278,7 @@ namespace CBTSecureDesktop.UI
                 {
                     try
                     {
-                        var ujian = await _examService.GetExamByIdAsync(_ujianId);
+                        var ujian = await _examService.GetExamByIdAsync(_ujianId, _mahasiswaId);
                         DateTime? endTime = ujian?.EndTime ?? _examGlobalEndTime;
                         int extendMinutes = ujian?.ExtendTimeMinutes ?? _examGlobalExtendMinutes;
 
@@ -350,7 +352,7 @@ namespace CBTSecureDesktop.UI
 
             // Update question display
             QuestionNumberText.Text = $"Pertanyaan {question.QuestionNumber}";
-            QuestionText.Text = HtmlHelper.ConvertToPlainText(question.QuestionText);
+            HtmlHelper.ApplyFormattedHtml(QuestionText, question.QuestionText);
             QuestionCountText.Text = $"Soal {index + 1} dari {_questions.Count}";
             UpdateDoubtToggleButtonState();
 
@@ -411,7 +413,7 @@ namespace CBTSecureDesktop.UI
                 System.Windows.Controls.Primitives.ToggleButton inputControl;
                 int currentIndex = i;
 
-                var optionText = HtmlHelper.ConvertToPlainText(question.Options[currentIndex]);
+                var optionHtml = question.Options[currentIndex];
                 var optionFile = currentIndex < question.OptionFiles.Count ? question.OptionFiles[currentIndex] : null;
 
                 var radioButton = new RadioButton
@@ -422,7 +424,7 @@ namespace CBTSecureDesktop.UI
                     Padding = new Thickness(15),
                     Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)), // PolinemaDarkGray
                     FontWeight = FontWeights.Medium,
-                    Content = await BuildOptionContentAsync(optionText, optionFile, question.OptionIds[currentIndex])
+                    Content = await BuildOptionContentAsync(optionHtml, optionFile, question.OptionIds[currentIndex])
                 };
 
                 if (question.IsMultiAnswer)
@@ -564,7 +566,7 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private async Task<object> BuildOptionContentAsync(string optionText, string? optionFile, long optionId)
+        private async Task<object> BuildOptionContentAsync(string optionHtml, string? optionFile, long optionId)
         {
             if (optionId > 0 && !string.IsNullOrWhiteSpace(optionFile))
             {
@@ -584,7 +586,7 @@ namespace CBTSecureDesktop.UI
 
                     image.PreviewMouseLeftButtonDown += OptionImage_PreviewMouseLeftButtonDown;
 
-                    if (string.IsNullOrWhiteSpace(optionText))
+                    if (string.IsNullOrWhiteSpace(optionHtml))
                     {
                         return image;
                     }
@@ -594,13 +596,7 @@ namespace CBTSecureDesktop.UI
                         Children =
                         {
                             image,
-                            new TextBlock
-                            {
-                                Text = optionText,
-                                TextWrapping = TextWrapping.Wrap,
-                                Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)),
-                                FontSize = 16
-                            }
+                            HtmlHelper.CreateFormattedTextBlock(optionHtml, new SolidColorBrush(Color.FromRgb(51, 51, 51)), 16, TextWrapping.Wrap)
                         }
                     };
                 }
@@ -610,13 +606,7 @@ namespace CBTSecureDesktop.UI
                 }
             }
 
-            return new TextBlock
-            {
-                Text = optionText,
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(51, 51, 51)),
-                FontSize = 16
-            };
+            return HtmlHelper.CreateFormattedTextBlock(optionHtml, new SolidColorBrush(Color.FromRgb(51, 51, 51)), 16, TextWrapping.Wrap);
         }
 
         private void OptionImage_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1158,7 +1148,7 @@ namespace CBTSecureDesktop.UI
                 .ToList();
 
             // Get pending soal IDs for offline indicator - in background to avoid blocking
-            var pendingSoalIds = await Task.Run(async () => await _examService.GetPendingSoalIdsAsync());
+            var pendingSoalIds = await Task.Run(async () => await _examService.GetPendingSoalIdsAsync(_ujianId, _mahasiswaId));
             var pendingQuestionIndexes = _questions
                 .Select((q, index) => new { q, index })
                 .Where(x => pendingSoalIds.Contains(x.q.SoalId))
@@ -1438,7 +1428,7 @@ namespace CBTSecureDesktop.UI
                 }
 
                 // Check if there are pending answers - use background task
-                int pendingCount = await Task.Run(async () => await _examService.GetPendingCountAsync());
+                int pendingCount = await _examService.GetPendingCountAsync(_ujianId, _mahasiswaId);
                 if (pendingCount > 0)
                 {
                     // Show dialog asking user to sync first
@@ -2143,7 +2133,7 @@ namespace CBTSecureDesktop.UI
             while (lastPendingCount > 0 && DateTime.Now < timeoutTimer)
             {
                 await Task.Delay(1000);
-                lastPendingCount = await _examService.GetPendingCountAsync();
+                lastPendingCount = await _examService.GetPendingCountAsync(_ujianId, _mahasiswaId);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {

@@ -75,20 +75,25 @@ namespace CBTSecureDesktop.Services
         }
 
         // Public helper to get current pending count
-        public async Task<int> GetPendingCountAsync()
+        public async Task<int> GetPendingCountAsync(long? ujianId = null, long? mahasiswaId = null)
         {
-            var list = await ReadPendingAsync();
+            var list = await ReadPendingAsync(ujianId, mahasiswaId);
             return list.Count;
         }
 
         // Public helper to get list of pending question IDs (soalId) for offline preview indicator
-        public async Task<List<long>> GetPendingSoalIdsAsync()
+        public async Task<List<long>> GetPendingSoalIdsAsync(long? ujianId = null, long? mahasiswaId = null)
         {
-            var list = await ReadPendingAsync();
+            var list = await ReadPendingAsync(ujianId, mahasiswaId);
             return list.Where(p => p.Type == PendingEntryType.SingleAnswer || p.Type == PendingEntryType.MultipleAnswers)
                        .Select(p => p.SoalId)
                        .Distinct()
                        .ToList();
+        }
+
+        public Task<bool> TestConnectionAsync()
+        {
+            return DatabaseConnection.Instance.TestConnectionAsync();
         }
 
         // Public trigger to request an immediate flush
@@ -121,13 +126,13 @@ namespace CBTSecureDesktop.Services
         }
 
         /// <summary>
-        /// Gets global exam (t_ujian) information by id.
+        /// Gets exam information for the active student session, including student-specific extend time.
         /// </summary>
-        public async Task<Ujian?> GetExamByIdAsync(long ujianId)
+        public async Task<Ujian?> GetExamByIdAsync(long ujianId, long mahasiswaId)
         {
             try
             {
-                return await _databaseService.GetExamByIdAsync(ujianId);
+                return await _databaseService.GetExamByIdAsync(ujianId, mahasiswaId);
             }
             catch (Exception ex)
             {
@@ -759,15 +764,27 @@ namespace CBTSecureDesktop.Services
             }
         }
 
-        private async Task<List<PendingAnswer>> ReadPendingAsync()
+        private async Task<List<PendingAnswer>> ReadPendingAsync(long? ujianId = null, long? mahasiswaId = null)
         {
             if (!File.Exists(_pendingFilePath)) return new List<PendingAnswer>();
             try
             {
                 var txt = await File.ReadAllTextAsync(_pendingFilePath);
                 if (string.IsNullOrWhiteSpace(txt)) return new List<PendingAnswer>();
-                var list = System.Text.Json.JsonSerializer.Deserialize<List<PendingAnswer>>(txt);
-                return list ?? new List<PendingAnswer>();
+
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<PendingAnswer>>(txt) ?? new List<PendingAnswer>();
+
+                if (ujianId.HasValue)
+                {
+                    list = list.Where(p => p.UjianId == ujianId.Value).ToList();
+                }
+
+                if (mahasiswaId.HasValue)
+                {
+                    list = list.Where(p => p.MahasiswaId == mahasiswaId.Value).ToList();
+                }
+
+                return list;
             }
             catch
             {

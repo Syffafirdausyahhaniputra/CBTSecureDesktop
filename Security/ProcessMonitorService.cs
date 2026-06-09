@@ -30,14 +30,24 @@ namespace CBTSecureDesktop.Security
                 // 3. Screen Recording & Streaming (Mencegah pencurian dan kebocoran bank soal)
                 "obs64", "obs32", "ShareX", "Streamlabs OBS", "bdcam", "fraps", "action",
 
-                // 4. Communication & Chat Apps (Mencegah koordinasi/diskusi antar mahasiswa)
-                "discord", "Telegram", "WhatsApp", "slack", "Teams", "zoom",
+                // 4. Communication, Social Media & Chat Apps (Mencegah koordinasi/diskusi antar mahasiswa)
+                "discord", "Telegram", "WhatsApp", "slack", "Teams", "zoom", "instagram", "line", "skype",
 
                 // 5. Virtualization Software (Mencegah bypass Kiosk Mode melalui OS Virtual/Sandbox)
                 "VirtualBox", "vmware", "vboxservice", "vmdkloop", "vpxclient",
 
                 // 6. Windows System Utilities (Mencegah mahasiswa mematikan paksa proses sistem CBT)
-                "taskmgr", "cmd", "powershell", "mmc", "regedit"
+                "taskmgr", "cmd", "powershell", "mmc", "regedit",
+
+                // 7. Microsoft Office Productivity Tools (Mencegah membuka file rangkuman / catatan materi)
+                "winword",   // Microsoft Word
+                "excel",     // Microsoft Excel
+                "powerpnt",  // Microsoft PowerPoint
+                "onenote",   // Microsoft OneNote
+                "outlook",   // Microsoft Outlook
+
+                // 8. Text Editors & Development Tools (Mencegah menyimpan atau membaca contekan teks rahasia)
+                "notepad", "notepad++", "sublime_text", "code" // code = VS Code
             };
 
             // Inisialisasi folder penyimpanan berkas log keamanan di AppData lokal mahasiswa
@@ -53,7 +63,7 @@ namespace CBTSecureDesktop.Security
         /// <summary>
         /// Memulai pemantauan background thread untuk memeriksa proses yang sedang berjalan.
         /// </summary>
-        /// <param name="onViolationDetected">Callback opsional untuk mengirimkan nama proses ilegal ke UI ExamWindow.</param>
+        /// <param name="onViolationDetected">Callback yang dimodifikasi untuk mengirimkan satu ringkasan string berisi daftar aplikasi yang ditutup dalam satu scan.</param>
         public void StartMonitoring(Action<string>? onViolationDetected = null)
         {
             if (_isRunning) return;
@@ -89,6 +99,9 @@ namespace CBTSecureDesktop.Security
         {
             while (!token.IsCancellationRequested)
             {
+                // List lokal untuk menampung nama-nama aplikasi terlarang yang ditutup pada siklus pemindaian saat ini
+                var detectedInThisCycle = new List<string>();
+
                 try
                 {
                     // Menarik seluruh daftar objek proses yang sedang aktif di Windows kernel
@@ -120,8 +133,11 @@ namespace CBTSecureDesktop.Security
                                     // Mencatat detail pelanggaran keamanan ke file log lokal teks
                                     LogViolation(processName);
 
-                                    // Mengirim sinyal nama aplikasi pelanggar ke UI ExamWindow untuk memicu sanksi/warning
-                                    onViolationDetected?.Invoke(processName);
+                                    // Masukkan nama proses ke dalam list siklus ini jika belum terdaftar
+                                    if (!detectedInThisCycle.Contains(processName))
+                                    {
+                                        detectedInThisCycle.Add(processName);
+                                    }
                                 }
                             }
                         }
@@ -138,6 +154,15 @@ namespace CBTSecureDesktop.Security
                             // Melepaskan alokasi memori komponen handler proses untuk mencegah memory leak di laptop mahasiswa
                             process.Dispose();
                         }
+                    }
+
+                    // KETENTUAN MODIFIKASI 1: Jika ada aplikasi terlarang yang terdeteksi ditutup pada siklus ini,
+                    // gabungkan daftarnya menjadi satu string pesan tunggal dan kirimkan ke UI.
+                    if (detectedInThisCycle.Any() && onViolationDetected != null)
+                    {
+                        // Menghasilkan string terformat contoh: "Chrome, WinWord, Notepad"
+                        string summaryMessage = string.Join(", ", detectedInThisCycle);
+                        onViolationDetected.Invoke(summaryMessage);
                     }
                 }
                 catch (Exception ex)

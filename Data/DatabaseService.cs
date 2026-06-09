@@ -429,22 +429,26 @@ namespace CBTSecureDesktop.Data
                     }
 
                     /// <summary>
-                    /// Gets exam (t_ujian) record by ujian_id (global exam configuration)
+                    /// Gets exam (t_ujian) record by ujian_id and student-specific extend time from t_ujian_mahasiswa.
                     /// </summary>
-                    public async Task<Ujian?> GetExamByIdAsync(long ujianId)
+                    public async Task<Ujian?> GetExamByIdAsync(long ujianId, long mahasiswaId)
                     {
                         try
                         {
                             using var connection = _dbConnection.GetConnection();
                             await connection.OpenAsync();
 
-                            string query = @"SELECT ujian_id, matakuliah_id, tahun_ajaran_id, prodi_id, kode_ujian, nama_ujian, status, shufflesoal, starttime, endtime, created_at, updated_at, extendtime
-                                             FROM t_ujian
-                                             WHERE ujian_id = @ujianId
-                                             LIMIT 1";
+                            string query = @"SELECT u.ujian_id, u.matakuliah_id, u.tahun_ajaran_id, u.prodi_id, u.kode_ujian, u.nama_ujian, u.status, u.shufflesoal, u.starttime, u.endtime, u.created_at, u.updated_at,
+                                                   um.extendtime as extendtime
+                                            FROM t_ujian u
+                                            LEFT JOIN t_ujian_mahasiswa um ON u.ujian_id = um.ujian_id AND um.mahasiswa_id = @mahasiswaId
+                                            WHERE u.ujian_id = @ujianId
+                                            ORDER BY um.ujianmahasiswa_id DESC
+                                            LIMIT 1";
 
                             using var command = new MySqlCommand(query, connection);
                             command.Parameters.AddWithValue("@ujianId", ujianId);
+                            command.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
 
                             using var reader = await command.ExecuteReaderAsync();
                             if (await reader.ReadAsync())
