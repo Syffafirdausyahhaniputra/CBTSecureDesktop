@@ -141,7 +141,7 @@
                               Margin="0,0,0,40"/>
 
                     <!-- Username Field -->
-                    <TextBlock Text="Username (NIM/NIP)"
+                    <TextBlock Text="Username (NIM)"
                               FontSize="14"
                               FontWeight="SemiBold"
                               Foreground="{StaticResource PolinemaDarkGray}"

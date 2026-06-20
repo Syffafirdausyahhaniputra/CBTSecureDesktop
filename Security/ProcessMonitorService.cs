@@ -14,6 +14,9 @@ namespace CBTSecureDesktop.Security
         private CancellationTokenSource? _cancellationTokenSource;
         private readonly HashSet<string> _forbiddenProcesses;
         private readonly string _logFilePath;
+        private readonly string _performanceLogFilePath;
+        private TimeSpan _lastCpuTotalProcessorTime;
+        private DateTime _lastCpuSampleTimeUtc;
 
         public ProcessMonitorService()
         {
@@ -58,6 +61,8 @@ namespace CBTSecureDesktop.Security
                 Directory.CreateDirectory(appFolder);
             }
             _logFilePath = Path.Combine(appFolder, "logs.txt");
+            _performanceLogFilePath = Path.Combine(appFolder, "log_performa_cbt.txt");
+            _lastCpuSampleTimeUtc = DateTime.UtcNow;
         }
 
         /// <summary>
@@ -170,6 +175,8 @@ namespace CBTSecureDesktop.Security
                     LogEvent($"Error during process monitoring scan: {ex.Message}");
                 }
 
+                await LogCurrentProcessPerformanceAsync(token);
+
                 try
                 {
                     // Menunda pemindaian selama 1.5 detik sebelum scan berikutnya demi menjaga penggunaan CPU laptop tetap rendah
@@ -205,6 +212,49 @@ namespace CBTSecureDesktop.Security
             catch (Exception ex)
             {
                 LogEvent($"Gagal mengeksekusi OS taskkill untuk {processName}: {ex.Message}");
+            }
+        }
+
+        private async Task LogCurrentProcessPerformanceAsync(CancellationToken token)
+        {
+            try
+            {
+                using var currentProcess = Process.GetCurrentProcess();
+
+                double ramMb = currentProcess.WorkingSet64 / (1024d * 1024d);
+
+                DateTime nowUtc = DateTime.UtcNow;
+                TimeSpan currentCpu = currentProcess.TotalProcessorTime;
+
+                double cpuPercent = 0d;
+                double elapsedMs = (nowUtc - _lastCpuSampleTimeUtc).TotalMilliseconds;
+
+                if (elapsedMs > 0)
+                {
+                    double cpuUsedMs = (currentCpu - _lastCpuTotalProcessorTime).TotalMilliseconds;
+                    cpuPercent = (cpuUsedMs / (elapsedMs * Environment.ProcessorCount)) * 100d;
+                    cpuPercent = Math.Max(0d, cpuPercent);
+                }
+
+                _lastCpuSampleTimeUtc = nowUtc;
+                _lastCpuTotalProcessorTime = currentCpu;
+
+                string logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] RAM: {ramMb:F1} MB | CPU: {cpuPercent:F1}%";
+
+                await using var stream = new FileStream(
+                    _performanceLogFilePath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite,
+                    4096,
+                    useAsync: true);
+
+                await using var writer = new StreamWriter(stream);
+                await writer.WriteLineAsync(logEntry.AsMemory(), token);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to write performance log: {ex.Message}");
             }
         }
 
