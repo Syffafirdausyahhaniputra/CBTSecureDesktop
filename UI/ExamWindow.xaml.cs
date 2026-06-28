@@ -808,7 +808,7 @@ namespace CBTSecureDesktop.UI
             QuestionImage.LayoutTransform = new ScaleTransform(_currentImageZoom, _currentImageZoom);
         }
 
-        private async Task ShowImageRefreshStatusAsync(string message, Brush foreground)
+        private async Task ShowImageRefreshStatusAsync(string message, System.Windows.Media.Brush foreground)
         {
             var statusToken = ++_imageRefreshStatusToken;
             ImageRefreshStatusText.Text = message;

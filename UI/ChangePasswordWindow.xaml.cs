@@ -35,7 +35,7 @@ namespace CBTSecureDesktop.UI
             TogglePasswordVisibility(ToggleConfirmBtn.IsChecked == true, ConfirmPasswordBox, ConfirmTextBox, IconConfirm);
         }
 
-        private void TogglePasswordVisibility(bool isShow, PasswordBox pBox, TextBox tBox, TextBlock icon)
+        private void TogglePasswordVisibility(bool isShow, PasswordBox pBox, System.Windows.Controls.TextBox tBox, TextBlock icon)
         {
             if (isShow)
             {
@@ -63,7 +63,7 @@ namespace CBTSecureDesktop.UI
         private void ConfirmPasswordBox_PasswordChanged(object sender, RoutedEventArgs e) => SyncPasswords(ConfirmPasswordBox, ConfirmTextBox, true);
         private void ConfirmTextBox_TextChanged(object sender, TextChangedEventArgs e) => SyncPasswords(ConfirmPasswordBox, ConfirmTextBox, false);
 
-        private void SyncPasswords(PasswordBox pBox, TextBox tBox, bool isFromPasswordBox)
+        private void SyncPasswords(PasswordBox pBox, System.Windows.Controls.TextBox tBox, bool isFromPasswordBox)
         {
             if (_isSyncing) return;
             _isSyncing = true;

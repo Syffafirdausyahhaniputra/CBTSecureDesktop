@@ -24,33 +24,51 @@ namespace CBTSecureDesktop.Security
             // StringComparer.OrdinalIgnoreCase memastikan deteksi kebal dari variasi huruf besar/kecil
             _forbiddenProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                // 1. Web Browsers (Mencegah pencarian jawaban / kecurangan materi)
+                // 1. Web Browsers
                 "chrome", "msedge", "firefox", "opera", "brave", "vivaldi", "safari",
 
-                // 2. Remote Desktop & Screen Sharing (Mencegah kendali joki ujian dari luar)
+                // 2. Remote Desktop & Screen Sharing
                 "TeamViewer", "AnyDesk", "RustDesk", "UltraViewer_Service", "UltraViewer", "mstsc",
 
-                // 3. Screen Recording & Streaming (Mencegah pencurian dan kebocoran bank soal)
+                // 3. Screen Recording & Streaming
                 "obs64", "obs32", "ShareX", "Streamlabs OBS", "bdcam", "fraps", "action",
 
-                // 4. Communication, Social Media & Chat Apps (Mencegah koordinasi/diskusi antar mahasiswa)
+                // 4. Communication, Social Media & Chat Apps
                 "discord", "Telegram", "WhatsApp", "slack", "Teams", "zoom", "instagram", "line", "skype",
 
-                // 5. Virtualization Software (Mencegah bypass Kiosk Mode melalui OS Virtual/Sandbox)
+                // 5. Virtualization Software
                 "VirtualBox", "vmware", "vboxservice", "vmdkloop", "vpxclient",
 
-                // 6. Windows System Utilities (Mencegah mahasiswa mematikan paksa proses sistem CBT)
+                // 6. Windows System Utilities
                 "taskmgr", "cmd", "powershell", "mmc", "regedit",
 
-                // 7. Microsoft Office Productivity Tools (Mencegah membuka file rangkuman / catatan materi)
-                "winword",   // Microsoft Word
-                "excel",     // Microsoft Excel
-                "powerpnt",  // Microsoft PowerPoint
-                "onenote",   // Microsoft OneNote
-                "outlook",   // Microsoft Outlook
+                // 7. Microsoft Office Productivity Tools
+                "winword", "excel", "powerpnt", "onenote", "outlook",
 
-                // 8. Text Editors & Development Tools (Mencegah menyimpan atau membaca contekan teks rahasia)
-                "notepad", "notepad++", "sublime_text", "code" // code = VS Code
+                // 8. Text Editors, IDEs & AI-Powered Development Tools
+                "notepad", "notepad++", "sublime_text",
+                "code",         // Visual Studio Code (Sering dipasang ekstensi AI)
+                "devenv",       // Microsoft Visual Studio (Community/Professional/Enterprise)
+                "cursor",       // Cursor (IDE spesifik AI yang sangat populer saat ini)
+                "zed",          // Zed IDE (Memiliki fitur AI terintegrasi)
+                "windsurf",     // Windsurf (IDE AI dari Codeium)
+                "idea64",       // IntelliJ IDEA (JetBrains - ada AI Assistant)
+                "idea",         // IntelliJ IDEA (Versi 32-bit jika ada)
+                "pycharm64",    // PyCharm (JetBrains)
+                "pycharm",      // PyCharm 32-bit
+                "studio64",     // Android Studio (Memiliki integrasi Gemini)
+                "antigravity",  // Sesuai permintaan spesifik
+                "ChatGPT",      // Desktop App ChatGPT resmi dari OpenAI
+                "Claude",       // Desktop App Claude resmi dari Anthropic
+
+                // 9. Aplikasi Microsoft Store (Universal Windows Platform)
+                // Catatan Keterbatasan: Aplikasi UWP dibungkus oleh ApplicationFrameHost.
+                // Jika aplikasi UWP tidak tertutup, ini dikarenakan arsitektur Runtime Broker Windows.
+                "ApplicationFrameHost", // Host universal untuk jendela aplikasi dari Microsoft Store
+                "CalculatorApp",        // Kalkulator bawaan Windows
+                "WinStore.App",         // Aplikasi Microsoft Store itu sendiri
+                "SnippingTool",         // Snipping tool Windows
+                "YourPhone"             // Aplikasi Phone Link Windows
             };
 
             // Inisialisasi folder penyimpanan berkas log keamanan di AppData lokal mahasiswa

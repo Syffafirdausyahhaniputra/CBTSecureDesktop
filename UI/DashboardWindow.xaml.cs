@@ -292,7 +292,7 @@ namespace CBTSecureDesktop.UI
             }
         }
 
-        private async Task ShowPreparationStatusAsync(string message, Brush brush)
+        private async Task ShowPreparationStatusAsync(string message, System.Windows.Media.Brush brush)
         {
             var token = ++_preparationStatusToken;
             PreparationStatusText.Text = message;

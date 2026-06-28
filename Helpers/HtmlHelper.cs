@@ -7,6 +7,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using MediaBrush = System.Windows.Media.Brush;
+using WpfFontStyle = System.Windows.FontStyle;
 
 namespace CBTSecureDesktop.Helpers
 {
@@ -44,7 +46,7 @@ namespace CBTSecureDesktop.Helpers
         /// Creates a TextBlock that can render a limited HTML subset used by the exam editor.
         /// Supported tags: p, br, strong, em, u, s, blockquote, pre, span style="color: ...", ol, ul, li.
         /// </summary>
-        public static TextBlock CreateFormattedTextBlock(string rawHtml, Brush? foreground = null, double fontSize = 16, TextWrapping textWrapping = TextWrapping.Wrap)
+        public static TextBlock CreateFormattedTextBlock(string rawHtml, MediaBrush? foreground = null, double fontSize = 16, TextWrapping textWrapping = TextWrapping.Wrap)
         {
             var textBlock = new TextBlock
             {
@@ -288,14 +290,14 @@ namespace CBTSecureDesktop.Helpers
             current.Inlines.Add(new Run(prefix));
         }
 
-        private static void PushStyledSpan(Stack<Span> spanStack, FontWeight? fontWeight, FontStyle? fontStyle, TextDecorationCollection? textDecorations, Brush? foreground)
+        private static void PushStyledSpan(Stack<Span> spanStack, FontWeight? fontWeight, WpfFontStyle? fontStyle, TextDecorationCollection? textDecorations, MediaBrush? foreground)
         {
             var span = CreateStyledSpan(fontWeight, fontStyle, textDecorations, foreground);
             spanStack.Peek().Inlines.Add(span);
             spanStack.Push(span);
         }
 
-        private static Span CreateStyledSpan(FontWeight? fontWeight, FontStyle? fontStyle, TextDecorationCollection? textDecorations, Brush? foreground)
+        private static Span CreateStyledSpan(FontWeight? fontWeight, WpfFontStyle? fontStyle, TextDecorationCollection? textDecorations, MediaBrush? foreground)
         {
             var span = new Span();
             if (fontWeight.HasValue)
@@ -392,7 +394,7 @@ namespace CBTSecureDesktop.Helpers
             return token.StartsWith("<!--", StringComparison.Ordinal);
         }
 
-        private static Brush? TryGetColorFromStyle(string attributes)
+        private static MediaBrush? TryGetColorFromStyle(string attributes)
         {
             if (string.IsNullOrWhiteSpace(attributes))
             {
@@ -446,7 +448,7 @@ namespace CBTSecureDesktop.Helpers
             return TryParseCssColor(colorValue);
         }
 
-        private static Brush? TryParseCssColor(string colorValue)
+        private static MediaBrush? TryParseCssColor(string colorValue)
         {
             if (string.IsNullOrWhiteSpace(colorValue))
             {
@@ -471,7 +473,7 @@ namespace CBTSecureDesktop.Helpers
             {
                 try
                 {
-                    return (Brush)new BrushConverter().ConvertFromString(colorValue)!;
+                    return (MediaBrush)new BrushConverter().ConvertFromString(colorValue)!;
                 }
                 catch
                 {
@@ -481,7 +483,7 @@ namespace CBTSecureDesktop.Helpers
 
             try
             {
-                return (Brush)new BrushConverter().ConvertFromString(colorValue)!;
+                return (MediaBrush)new BrushConverter().ConvertFromString(colorValue)!;
             }
             catch
             {
