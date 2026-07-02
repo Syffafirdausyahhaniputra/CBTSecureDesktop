@@ -1080,7 +1080,7 @@ namespace CBTSecureDesktop.UI
                 if (RefreshExamButton != null)
                 {
                     RefreshExamButton.IsEnabled = true;
-                    RefreshExamButton.Content = "🔄 Segarkan Soal";
+                    RefreshExamButton.Content = "🔄 Refresh Soal";
                 }
             }
         }

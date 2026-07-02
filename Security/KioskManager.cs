@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media; // [MODIFIKASI] Ditambahkan untuk pewarnaan SolidColorBrush
-// using System.Windows.Threading; // [MODIFIKASI]: Dibutuhkan untuk Timer pemantau layar
+using System.Windows.Threading; // [MODIFIKASI]: Dibutuhkan untuk Timer pemantau layar
 using Microsoft.Win32;
 
 namespace CBTSecureDesktop.Security
@@ -25,12 +25,12 @@ namespace CBTSecureDesktop.Security
         private List<Window> _blackoutWindows = new List<Window>();
 
         // [MODIFIKASI]: Timer untuk terus-menerus mengecek apakah mahasiswa mencolok kabel HDMI di tengah ujian
-        //private DispatcherTimer? _monitorCheckTimer;
+        private DispatcherTimer? _monitorCheckTimer;
 
         // [MODIFIKASI]: Import Windows API untuk mengecek jumlah koneksi fisik monitor dari Kartu Grafis
-        // [DllImport("user32.dll")]
-        // private static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
-        // private const uint QDC_ONLY_ACTIVE_PATHS = 2; // Hanya menghitung jalur tampilan yang aktif menyala
+        [DllImport("user32.dll")]
+        private static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
+        private const uint QDC_ONLY_ACTIVE_PATHS = 2; // Hanya menghitung jalur tampilan yang aktif menyala
 
         // Windows API imports for taskbar manipulation
         [DllImport("user32.dll")]
@@ -90,7 +90,7 @@ namespace CBTSecureDesktop.Security
             // =================================================================
             // [MODIFIKASI]: Mulai pemantauan mode Duplicate secara Real-Time
             // =================================================================
-            // StartPhysicalMonitorCheck();
+            StartPhysicalMonitorCheck();
         }
 
         /// <summary>
@@ -104,7 +104,7 @@ namespace CBTSecureDesktop.Security
             // =================================================================
             // [MODIFIKASI]: Matikan pemantauan saat ujian selesai
             // =================================================================
-            // StopPhysicalMonitorCheck();
+            StopPhysicalMonitorCheck();
 
             // Restore original window properties
             _kioskWindow.WindowStyle = _previousWindowStyle;
@@ -184,64 +184,84 @@ namespace CBTSecureDesktop.Security
         // =================================================================
         // [MODIFIKASI] BLOK FUNGSI BARU UNTUK DETEKSI MODE DUPLICATE/CLONE
         // =================================================================
-        //private void StartPhysicalMonitorCheck()
-        //{
-        //    // Mengecek kondisi layar setiap 2 detik
-        //    _monitorCheckTimer = new DispatcherTimer();
-        //    _monitorCheckTimer.Interval = TimeSpan.FromSeconds(2);
-        //    _monitorCheckTimer.Tick += (s, e) =>
-        //    {
-        //        CheckForDuplicateMonitors();
-        //    };
-        //    _monitorCheckTimer.Start();
-        //}
+        private void StartPhysicalMonitorCheck()
+        {
+            // Mengecek kondisi layar setiap 2 detik
+            _monitorCheckTimer = new DispatcherTimer();
+            _monitorCheckTimer.Interval = TimeSpan.FromSeconds(2);
+            _monitorCheckTimer.Tick += (s, e) =>
+            {
+                CheckForDuplicateMonitors();
+            };
+            _monitorCheckTimer.Start();
+        }
 
-        //private void StopPhysicalMonitorCheck()
-        //{
-        //    if (_monitorCheckTimer != null)
-        //    {
-        //        _monitorCheckTimer.Stop();
-        //        _monitorCheckTimer = null;
-        //    }
-        //}
+        private void StopPhysicalMonitorCheck()
+        {
+            if (_monitorCheckTimer != null)
+            {
+                _monitorCheckTimer.Stop();
+                _monitorCheckTimer = null;
+            }
+        }
 
-        //private void CheckForDuplicateMonitors()
-        //{
-        //    try
-        //    {
-        //        // Mengambil jumlah layar logika (Yang dilihat oleh Windows)
-        //        int logicalScreens = System.Windows.Forms.Screen.AllScreens.Length;
+        private void CheckForDuplicateMonitors()
+        {
+            try
+            {
+                // Mengambil jumlah layar logika (Yang dilihat oleh Windows)
+                int logicalScreens = System.Windows.Forms.Screen.AllScreens.Length;
 
-        //        // Mengambil jumlah jalur fisik (Kabel HDMI/DisplayPort/Miracast yang aktif)
-        //        int result = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out uint physicalPaths, out uint modeCount);
+                // Mengambil jumlah jalur fisik (Kabel HDMI/DisplayPort/Miracast yang aktif)
+                int result = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out uint physicalPaths, out uint modeCount);
 
-        //        if (result == 0) // Jika pembacaan API sukses
-        //        {
-        //            // LOGIKA INTI: Jika layar logika cuma 1, tapi kabel fisik yang tersambung > 1, itu pasti Duplicate Mode!
-        //            if (logicalScreens == 1 && physicalPaths > 1)
-        //            {
-        //                // Hentikan timer agar pesan error tidak muncul berkali-kali
-        //                _monitorCheckTimer?.Stop();
+                if (result == 0) // Jika pembacaan API sukses
+                {
+                    // LOGIKA INTI: Jika layar logika cuma 1, tapi kabel fisik yang tersambung > 1, itu pasti Duplicate Mode!
+                    if (logicalScreens == 1 && physicalPaths > 1)
+                    {
+                        // Hentikan timer agar pesan error tidak muncul berkali-kali
+                        _monitorCheckTimer?.Stop();
 
-        //                // Tampilkan peringatan
-        //                MessageBox.Show(
-        //                    "Keamanan Sistem: Layar Ganda (Duplicate/Mirroring) terdeteksi!\n\n" +
-        //                    "Menampilkan soal ujian ke layar lain tidak diperbolehkan. " +
-        //                    "Silakan cabut kabel monitor eksternal Anda atau putuskan koneksi cast layar.",
-        //                    "Pelanggaran CBT",
-        //                    MessageBoxButton.OK,
-        //                    MessageBoxImage.Error);
+                        // =================================================================
+                        // [MODIFIKASI]: Mengikat MessageBox langsung ke layar ujian 
+                        // tanpa harus menonaktifkan status Topmost
+                        // =================================================================
+                        if (_kioskWindow != null)
+                        {
+                            // Menambahkan _kioskWindow sebagai "Owner" (Parameter 1),
+                            // sehingga MessageBox otomatis mewarisi sifat Topmost layar ujian.
+                            MessageBox.Show(
+                                _kioskWindow, 
+                                "Keamanan Sistem: Layar Ganda (Duplicate/Mirroring) terdeteksi!\n\n" +
+                                "Menampilkan soal ujian ke layar lain tidak diperbolehkan. " +
+                                "Silakan cabut kabel monitor eksternal Anda atau putuskan koneksi cast layar.",
+                                "Pelanggaran CBT",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
+                        }
+                        else
+                        {
+                            MessageBox.Show(
+                                "Keamanan Sistem: Layar Ganda (Duplicate/Mirroring) terdeteksi!\n\n" +
+                                "Menampilkan soal ujian ke layar lain tidak diperbolehkan. " +
+                                "Silakan cabut kabel monitor eksternal Anda atau putuskan koneksi cast layar.",
+                                "Pelanggaran CBT",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
+                        }
+                        // =================================================================
 
-        //                // OPSI: Tutup paksa aplikasi (Shutdown) atau tendang mahasiswa ke halaman login
-        //                Application.Current.Shutdown();
-        //            }
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        System.Diagnostics.Debug.WriteLine($"Gagal mendeteksi perangkat keras monitor: {ex.Message}");
-        //    }
-        //}
+                        // Tutup paksa aplikasi (Shutdown) setelah mahasiswa menekan tombol OK
+                        Application.Current.Shutdown();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Gagal mendeteksi perangkat keras monitor: {ex.Message}");
+            }
+        }
         // =================================================================
 
         // =================================================================

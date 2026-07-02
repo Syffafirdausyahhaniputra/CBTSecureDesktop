@@ -9,7 +9,6 @@ namespace CBTSecureDesktop.Models
         public long MatakuliahId { get; set; }
         public long TahunAjaranId { get; set; }
         public long ProdiId { get; set; }
-        public string KodeUjian { get; set; } = string.Empty;
         public string NamaUjian { get; set; } = string.Empty;
         public string Status { get; set; } = "menunggu"; // menunggu, dimulai, selesai
         public int ShuffleSoal { get; set; }

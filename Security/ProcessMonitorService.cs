@@ -13,6 +13,7 @@ namespace CBTSecureDesktop.Security
         private bool _isRunning;
         private CancellationTokenSource? _cancellationTokenSource;
         private readonly HashSet<string> _forbiddenProcesses;
+        private readonly HashSet<string> _allowedProcesses;
         private readonly string _logFilePath;
         private readonly string _performanceLogFilePath;
         private TimeSpan _lastCpuTotalProcessorTime;
@@ -69,6 +70,15 @@ namespace CBTSecureDesktop.Security
                 "WinStore.App",         // Aplikasi Microsoft Store itu sendiri
                 "SnippingTool",         // Snipping tool Windows
                 "YourPhone"             // Aplikasi Phone Link Windows
+            };
+
+            // =================================================================
+            // [MODIFIKASI]: Inisialisasi proses pengecualian yang aman
+            // =================================================================
+            _allowedProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "webview2", // Mengecualikan msedgewebview2 yang digunakan OS / WPF
+                "hub"       // (Opsional) Jika nanti Anda memblokir 'github' tapi butuh 'VpnHub' dll, bisa disesuaikan
             };
 
             // Inisialisasi folder penyimpanan berkas log keamanan di AppData lokal mahasiswa
@@ -134,11 +144,21 @@ namespace CBTSecureDesktop.Security
                     {
                         try
                         {
-                            // Memeriksa apakah nama proses saat ini terdaftar di dalam HashSet _forbiddenProcesses
-                            if (_forbiddenProcesses.Contains(process.ProcessName))
-                            {
-                                string processName = process.ProcessName;
+                            string processName = process.ProcessName;
 
+                            // [MODIFIKASI LOGIKA PENCARIAN]:
+                            // Mengecek apakah processName MENGANDUNG salah satu kata dari daftar _forbiddenProcesses
+                            bool isForbidden = _forbiddenProcesses.Any(forbiddenWord =>
+                                processName.Contains(forbiddenWord, StringComparison.OrdinalIgnoreCase));
+
+                            // =================================================================
+                            // [MODIFIKASI]: Cek apakah mengandung kata yang dikecualikan
+                            // =================================================================
+                            bool isAllowed = _allowedProcesses.Any(allowedWord =>
+                                processName.Contains(allowedWord, StringComparison.OrdinalIgnoreCase));
+
+                            if (isForbidden && !isAllowed)
+                            {
                                 if (!process.HasExited)
                                 {
                                     try

@@ -377,7 +377,7 @@ namespace CBTSecureDesktop.Data
 
                 string query = @"
                     SELECT DISTINCT u.ujian_id, u.matakuliah_id, u.tahun_ajaran_id, u.prodi_id,
-                           u.kode_ujian, u.nama_ujian, u.status, u.shufflesoal,
+                           u.nama_ujian, u.status, u.shufflesoal,
                            u.starttime, u.endtime, u.created_at, u.updated_at,
                            m.nama as matakuliah_nama, p.nama as prodi_nama,
                            um.status as status_mahasiswa, um.nilai as nilai_mahasiswa,
@@ -404,7 +404,6 @@ namespace CBTSecureDesktop.Data
                         MatakuliahId = reader.GetInt64("matakuliah_id"),
                         TahunAjaranId = reader.GetInt64("tahun_ajaran_id"),
                         ProdiId = reader.GetInt64("prodi_id"),
-                        KodeUjian = reader.GetString("kode_ujian"),
                         NamaUjian = reader.GetString("nama_ujian"),
                         Status = reader.GetString("status"),
                         ShuffleSoal = reader.GetInt32("shufflesoal"),
@@ -438,7 +437,7 @@ namespace CBTSecureDesktop.Data
                             using var connection = _dbConnection.GetConnection();
                             await connection.OpenAsync();
 
-                            string query = @"SELECT u.ujian_id, u.matakuliah_id, u.tahun_ajaran_id, u.prodi_id, u.kode_ujian, u.nama_ujian, u.status, u.shufflesoal, u.starttime, u.endtime, u.created_at, u.updated_at,
+                            string query = @"SELECT u.ujian_id, u.matakuliah_id, u.tahun_ajaran_id, u.prodi_id, u.nama_ujian, u.status, u.shufflesoal, u.starttime, u.endtime, u.created_at, u.updated_at,
                                                    um.extendtime as extendtime
                                             FROM t_ujian u
                                             LEFT JOIN t_ujian_mahasiswa um ON u.ujian_id = um.ujian_id AND um.mahasiswa_id = @mahasiswaId
@@ -459,7 +458,6 @@ namespace CBTSecureDesktop.Data
                                     MatakuliahId = reader.GetInt64("matakuliah_id"),
                                     TahunAjaranId = reader.GetInt64("tahun_ajaran_id"),
                                     ProdiId = reader.GetInt64("prodi_id"),
-                                    KodeUjian = reader.IsDBNull("kode_ujian") ? string.Empty : reader.GetString("kode_ujian"),
                                     NamaUjian = reader.IsDBNull("nama_ujian") ? string.Empty : reader.GetString("nama_ujian"),
                                     Status = reader.IsDBNull("status") ? "menunggu" : reader.GetString("status"),
                                     ShuffleSoal = reader.IsDBNull("shufflesoal") ? 0 : reader.GetInt32("shufflesoal"),
