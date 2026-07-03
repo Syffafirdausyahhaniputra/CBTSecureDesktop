@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Text.Json;
 using CBTSecureDesktop.Data;
 using CBTSecureDesktop.Models;
+using System.Net.Http;
+using System.Net.Http.Json;
 
 namespace CBTSecureDesktop.Services
 {
@@ -42,8 +44,8 @@ namespace CBTSecureDesktop.Services
         // Pending queue file and sync controls
         private readonly string _pendingFilePath;
         private readonly string _appDataDirectory;
-        private readonly SemaphoreSlim _pendingLock = new(1,1);
-        private readonly SemaphoreSlim _doubtLock = new(1,1);
+        private readonly SemaphoreSlim _pendingLock = new(1, 1);
+        private readonly SemaphoreSlim _doubtLock = new(1, 1);
         private readonly TimeSpan _flushInterval = TimeSpan.FromSeconds(30);
         private CancellationTokenSource? _flushCts;
 
@@ -214,6 +216,15 @@ namespace CBTSecureDesktop.Services
 
                 // Start exam session once when exam window is opened
                 _currentExamSessionId = await _databaseService.StartExamSessionAsync(ujianId, mahasiswaId);
+                
+                try
+                {
+                    await NotifyMonitoringAsync(ujianId);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Notify monitoring error: {ex.Message}");
+                }
 
                 // Get latest questions from database and apply deterministic shuffle
                 var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
@@ -520,6 +531,9 @@ namespace CBTSecureDesktop.Services
                     };
                     await EnqueuePendingAsync(entry);
                 }
+
+                await NotifyMonitoringAsync(ujianId);
+
                 return ok;
             }
             catch (Exception ex)
@@ -590,10 +604,10 @@ namespace CBTSecureDesktop.Services
                 {
                     var entry = new PendingAnswer
                     {
-                        Type        = PendingEntryType.BreachTermination,
-                        UjianId     = ujianId,
+                        Type = PendingEntryType.BreachTermination,
+                        UjianId = ujianId,
                         MahasiswaId = mahasiswaId,
-                        Keterangan  = keterangan
+                        Keterangan = keterangan
                     };
                     await EnqueuePendingAsync(entry);
                 }
@@ -604,10 +618,10 @@ namespace CBTSecureDesktop.Services
                 System.Diagnostics.Debug.WriteLine($"TerminateForBreachAsync error: {ex.Message}");
                 var entry = new PendingAnswer
                 {
-                    Type        = PendingEntryType.BreachTermination,
-                    UjianId     = ujianId,
+                    Type = PendingEntryType.BreachTermination,
+                    UjianId = ujianId,
                     MahasiswaId = mahasiswaId,
-                    Keterangan  = keterangan
+                    Keterangan = keterangan
                 };
                 await EnqueuePendingAsync(entry);
                 return false;
@@ -909,6 +923,17 @@ namespace CBTSecureDesktop.Services
             }
             catch { }
         }
+
+        private async Task NotifyMonitoringAsync(long ujianId)
+        {
+            using var client = new HttpClient();
+
+            client.BaseAddress = new Uri("http://localhost:8000"); // URL Laravel
+
+            var response = await client.PostAsync(
+                $"/api/ujian/{ujianId}/monitoring", null);
+
+            response.EnsureSuccessStatusCode();
+        }
     }
 }
-
