@@ -1,5 +1,7 @@
 using MySqlConnector;
-using System.Configuration;
+using System;
+using System.Threading.Tasks;
+using CBTSecureDesktop.Configuration;
 
 namespace CBTSecureDesktop.Data
 {
@@ -9,12 +11,11 @@ namespace CBTSecureDesktop.Data
     public class DatabaseConnection
     {
         private static DatabaseConnection? _instance;
-        private readonly string _connectionString;
 
         private DatabaseConnection()
         {
-            // Connection string for Laragon local database
-            _connectionString = "Server=localhost;Port=3306;Database=cbt_database;User Id=root;Password=;";
+            // Konstruktor sekarang dikosongkan. 
+            // Kita tidak lagi menyimpan connection string secara telanjang di sini.
         }
 
         /// <summary>
@@ -37,7 +38,8 @@ namespace CBTSecureDesktop.Data
         /// </summary>
         public MySqlConnection GetConnection()
         {
-            return new MySqlConnection(_connectionString);
+            string secureConnString = AppConfig.GetDatabaseConnectionString();
+            return new MySqlConnection(secureConnString);
         }
 
         /// <summary>

@@ -81,9 +81,8 @@ namespace CBTSecureDesktop.UI
                 {
                     var exams = await _examService.GetAvailableExamsAsync(mahasiswaId);
                     var orderedExams = exams
-                        .OrderBy(GetExamDisplayPriority)
-                        .ThenBy(x => x.StartTime)
-                        .ThenBy(x => x.NamaUjian)
+                        .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt ?? DateTime.MinValue)
+                        .ThenByDescending(x => x.StartTime)
                         .ToList();
 
                     ExamsListView.ItemsSource = orderedExams;

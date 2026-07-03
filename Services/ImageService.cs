@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
+using CBTSecureDesktop.Configuration;
 
 namespace CBTSecureDesktop.Services
 {
@@ -22,9 +23,13 @@ namespace CBTSecureDesktop.Services
             _httpClient.Timeout = TimeSpan.FromSeconds(30);
         }
 
-        public ImageService(string baseUrl = "http://127.0.0.1:8000/api/image/")
+        public ImageService(string? baseUrl = null)
         {
-            _baseUrl = baseUrl.EndsWith("/") ? baseUrl : baseUrl + "/";
+            string resolvedBaseUrl = string.IsNullOrWhiteSpace(baseUrl)
+                ? AppConfig.GetImageApiBaseUrl()
+                : baseUrl;
+
+            _baseUrl = resolvedBaseUrl.EndsWith("/") ? resolvedBaseUrl : resolvedBaseUrl + "/";
 
             // Set up local cache directory in AppData
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -64,7 +69,21 @@ namespace CBTSecureDesktop.Services
                 return GetDefaultPlaceholderImage();
             }
 
-            string cacheFilePath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
+            string cacheFilePath = Path.Combine(_optionCacheDirectory, $"{optionId}.img");
+            string legacyPngPath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
+
+            if (!File.Exists(cacheFilePath) && File.Exists(legacyPngPath))
+            {
+                try
+                {
+                    File.Move(legacyPngPath, cacheFilePath, true);
+                }
+                catch
+                {
+                    cacheFilePath = legacyPngPath;
+                }
+            }
+
             string resolvedToken = ResolveToken(token);
             string requestUrl = BuildRequestUrl($"{_baseUrl}option/{optionId}", resolvedToken);
 
@@ -164,18 +183,24 @@ namespace CBTSecureDesktop.Services
                 return GetDefaultPlaceholderImage();
             }
 
-            string cacheFilePath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
+            string cacheFilePath = Path.Combine(_optionCacheDirectory, $"{optionId}.img");
+            string legacyPngPath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
 
-            if (File.Exists(cacheFilePath))
+            try
             {
-                try
+                if (File.Exists(cacheFilePath))
                 {
                     File.Delete(cacheFilePath);
                 }
-                catch (Exception ex)
+
+                if (File.Exists(legacyPngPath))
                 {
-                    System.Diagnostics.Debug.WriteLine($"Failed to delete option cache: {ex.Message}");
+                    File.Delete(legacyPngPath);
                 }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to delete option cache: {ex.Message}");
             }
 
             string resolvedToken = ResolveToken(token);
@@ -194,14 +219,23 @@ namespace CBTSecureDesktop.Services
         /// </summary>
         public void DeleteCacheFile(string imageId)
         {
+            if (string.IsNullOrWhiteSpace(imageId))
+            {
+                return;
+            }
+
             try
             {
                 string cleanImageId = SanitizeFileName(imageId);
                 string cacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.img");
-                if (File.Exists(cacheFilePath))
+                string legacyCacheFilePath = Path.Combine(_cacheDirectory, $"{cleanImageId}.png");
+
+                bool deletedImg = DeleteFileWithRetry(cacheFilePath);
+                bool deletedLegacy = DeleteFileWithRetry(legacyCacheFilePath);
+
+                if (deletedImg || deletedLegacy)
                 {
-                    File.Delete(cacheFilePath);
-                    System.Diagnostics.Debug.WriteLine($"Deleted cached image: {cacheFilePath}");
+                    System.Diagnostics.Debug.WriteLine($"Deleted cached image: {cleanImageId}");
                 }
             }
             catch (Exception ex)
@@ -224,7 +258,7 @@ namespace CBTSecureDesktop.Services
                         MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount)
                     };
 
-                    Parallel.ForEach(imageIds, options, id =>
+                    Parallel.ForEach(imageIds.Distinct(), options, id =>
                     {
                         DeleteCacheFile(id);
                     });
@@ -234,6 +268,90 @@ namespace CBTSecureDesktop.Services
                     System.Diagnostics.Debug.WriteLine($"Error deleting cache files in parallel: {ex.Message}");
                 }
             });
+        }
+
+        public void DeleteOptionCacheFile(long optionId)
+        {
+            if (optionId <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                string optionCachePath = Path.Combine(_optionCacheDirectory, $"{optionId}.img");
+                string legacyOptionCachePath = Path.Combine(_optionCacheDirectory, $"{optionId}.png");
+
+                DeleteFileWithRetry(optionCachePath);
+                DeleteFileWithRetry(legacyOptionCachePath);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to delete option cache file for {optionId}: {ex.Message}");
+            }
+        }
+
+        public Task DeleteOptionCacheFilesAsync(IEnumerable<long> optionIds)
+        {
+            return Task.Run(() =>
+            {
+                try
+                {
+                    var options = new System.Threading.Tasks.ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount)
+                    };
+
+                    Parallel.ForEach(optionIds.Distinct(), options, id =>
+                    {
+                        DeleteOptionCacheFile(id);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error deleting option cache files in parallel: {ex.Message}");
+                }
+            });
+        }
+
+        private static bool DeleteFileWithRetry(string filePath, int maxRetries = 5, int delayMs = 80)
+        {
+            if (!File.Exists(filePath))
+            {
+                return false;
+            }
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    File.SetAttributes(filePath, FileAttributes.Normal);
+                    File.Delete(filePath);
+
+                    if (!File.Exists(filePath))
+                    {
+                        return true;
+                    }
+                }
+                catch (IOException)
+                {
+                    if (attempt == maxRetries)
+                    {
+                        return false;
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    if (attempt == maxRetries)
+                    {
+                        return false;
+                    }
+                }
+
+                Task.Delay(delayMs).GetAwaiter().GetResult();
+            }
+
+            return !File.Exists(filePath);
         }
 
         /// <summary>

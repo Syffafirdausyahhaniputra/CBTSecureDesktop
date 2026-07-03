@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.ServiceProcess;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Win32;
 
 namespace CBTSecureDesktop.Security
 {
@@ -15,9 +17,6 @@ namespace CBTSecureDesktop.Security
         private readonly HashSet<string> _forbiddenProcesses;
         private readonly HashSet<string> _allowedProcesses;
         private readonly string _logFilePath;
-        private readonly string _performanceLogFilePath;
-        private TimeSpan _lastCpuTotalProcessorTime;
-        private DateTime _lastCpuSampleTimeUtc;
 
         public ProcessMonitorService()
         {
@@ -89,8 +88,6 @@ namespace CBTSecureDesktop.Security
                 Directory.CreateDirectory(appFolder);
             }
             _logFilePath = Path.Combine(appFolder, "logs.txt");
-            _performanceLogFilePath = Path.Combine(appFolder, "log_performa_cbt.txt");
-            _lastCpuSampleTimeUtc = DateTime.UtcNow;
         }
 
         /// <summary>
@@ -213,7 +210,24 @@ namespace CBTSecureDesktop.Security
                     LogEvent($"Error during process monitoring scan: {ex.Message}");
                 }
 
-                await LogCurrentProcessPerformanceAsync(token);
+                // ================================================================
+                // TAMBAHAN: Deteksi dan stop Windows Services yang terlarang
+                // ================================================================
+                try
+                {
+                    var stoppedServices = DetectAndStopForbiddenServices();
+
+                    // Jika ada services yang di-stop, kirimkan notifikasi ke UI
+                    if (stoppedServices.Any() && onViolationDetected != null)
+                    {
+                        string servicesSummary = $"[SERVICES STOPPED] {string.Join(", ", stoppedServices)}";
+                        onViolationDetected.Invoke(servicesSummary);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogEvent($"Error during service monitoring scan: {ex.Message}");
+                }
 
                 try
                 {
@@ -255,44 +269,151 @@ namespace CBTSecureDesktop.Security
 
         private async Task LogCurrentProcessPerformanceAsync(CancellationToken token)
         {
+            // This method removed - performance logging is now handled by PerformanceMonitoringService
+            // ProcessMonitorService focuses on security only - no performance tracking
+            await Task.CompletedTask;
+        }
+        /// <summary>
+        /// Mendeteksi dan menghentikan Windows Services yang terlarang berdasarkan daftar _forbiddenProcesses.
+        /// Mengembalikan list nama services yang berhasil di-stop dalam siklus ini.
+        /// </summary>
+        private List<string> DetectAndStopForbiddenServices()
+        {
+            var stoppedServices = new List<string>();
+
             try
             {
-                using var currentProcess = Process.GetCurrentProcess();
+                // Ambil semua services yang sedang berjalan di sistem
+                ServiceController[] services = ServiceController.GetServices();
 
-                double ramMb = currentProcess.WorkingSet64 / (1024d * 1024d);
-
-                DateTime nowUtc = DateTime.UtcNow;
-                TimeSpan currentCpu = currentProcess.TotalProcessorTime;
-
-                double cpuPercent = 0d;
-                double elapsedMs = (nowUtc - _lastCpuSampleTimeUtc).TotalMilliseconds;
-
-                if (elapsedMs > 0)
+                foreach (var service in services)
                 {
-                    double cpuUsedMs = (currentCpu - _lastCpuTotalProcessorTime).TotalMilliseconds;
-                    cpuPercent = (cpuUsedMs / (elapsedMs * Environment.ProcessorCount)) * 100d;
-                    cpuPercent = Math.Max(0d, cpuPercent);
+                    try
+                    {
+                        // Extract nama executable dari service path
+                        string serviceExecutableName = ExtractServiceExecutableName(service.ServiceName);
+
+                        if (string.IsNullOrEmpty(serviceExecutableName))
+                            continue;
+
+                        // Cek apakah nama executable termasuk dalam daftar terlarang
+                        bool isForbidden = _forbiddenProcesses.Any(forbiddenWord =>
+                            serviceExecutableName.Contains(forbiddenWord, StringComparison.OrdinalIgnoreCase));
+
+                        // Cek apakah dikecualikan dari daftar putih
+                        bool isAllowed = _allowedProcesses.Any(allowedWord =>
+                            serviceExecutableName.Contains(allowedWord, StringComparison.OrdinalIgnoreCase));
+
+                        if (isForbidden && !isAllowed && service.Status == ServiceControllerStatus.Running)
+                        {
+                            try
+                            {
+                                // Langkah Pertama: Stop service menggunakan standard .NET API
+                                service.Stop();
+                                service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(3));
+
+                                LogViolation($"Service '{service.ServiceName}' (executable: {serviceExecutableName})");
+                                stoppedServices.Add($"{service.ServiceName}");
+                            }
+                            catch (Exception stopEx)
+                            {
+                                Debug.WriteLine($"Failed to stop service {service.ServiceName}: {stopEx.Message}");
+
+                                // Langkah Cadangan (Fallback): Gunakan sc stop command via OS
+                                try
+                                {
+                                    ForceStopServiceViaOS(service.ServiceName);
+                                    stoppedServices.Add($"{service.ServiceName} (forced)");
+                                }
+                                catch (Exception forceEx)
+                                {
+                                    Debug.WriteLine($"Failed to force stop service {service.ServiceName}: {forceEx.Message}");
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Abaikan error untuk service individual, lanjutkan ke service berikutnya
+                        Debug.WriteLine($"Error processing service {service.ServiceName}: {ex.Message}");
+                    }
                 }
-
-                _lastCpuSampleTimeUtc = nowUtc;
-                _lastCpuTotalProcessorTime = currentCpu;
-
-                string logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] RAM: {ramMb:F1} MB | CPU: {cpuPercent:F1}%";
-
-                await using var stream = new FileStream(
-                    _performanceLogFilePath,
-                    FileMode.Append,
-                    FileAccess.Write,
-                    FileShare.ReadWrite,
-                    4096,
-                    useAsync: true);
-
-                await using var writer = new StreamWriter(stream);
-                await writer.WriteLineAsync(logEntry.AsMemory(), token);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to write performance log: {ex.Message}");
+                LogEvent($"Error during service monitoring scan: {ex.Message}");
+            }
+
+            return stoppedServices;
+        }
+
+        /// <summary>
+        /// Mengekstrak nama executable dari path service yang tersimpan di registry Windows.
+        /// Menangani berbagai format path seperti "C:\Program Files\App\app.exe" atau hanya nama service.
+        /// </summary>
+        private string ExtractServiceExecutableName(string serviceName)
+        {
+            try
+            {
+                // Coba ambil dari registry
+                string registryPath = @"SYSTEM\CurrentControlSet\Services\" + serviceName;
+                using (var regKey = Registry.LocalMachine.OpenSubKey(registryPath))
+                {
+                    if (regKey != null)
+                    {
+                        var imagePath = regKey.GetValue("ImagePath") as string;
+                        if (!string.IsNullOrEmpty(imagePath))
+                        {
+                            // Extract nama file dari path penuh
+                            // Contoh: "C:\Program Files\App\app.exe" → "app"
+                            // Atau: "\"C:\Program Files\App\app.exe\" -arg" → "app"
+
+                            // Hilangkan quote jika ada
+                            imagePath = imagePath.Trim('"');
+
+                            // Ambil bagian setelah "/" atau "\"
+                            string fileName = Path.GetFileNameWithoutExtension(imagePath);
+                            return fileName;
+                        }
+                    }
+                }
+
+                // Jika registry gagal, coba gunakan nama service sebagai fallback
+                return serviceName;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error extracting executable name for service {serviceName}: {ex.Message}");
+                return serviceName;
+            }
+        }
+
+        /// <summary>
+        /// Fallback mechanism untuk force stop service menggunakan sc command Windows.
+        /// Ini digunakan jika standard API gagal atau permission denied.
+        /// </summary>
+        private void ForceStopServiceViaOS(string serviceName)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "net",
+                    Arguments = $"stop \"{serviceName}\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using (var p = Process.Start(psi))
+                {
+                    p?.WaitForExit(5000); // Menunggu maksimal 5 detik
+                }
+            }
+            catch (Exception ex)
+            {
+                LogEvent($"Failed to force stop service {serviceName} via OS: {ex.Message}");
             }
         }
 

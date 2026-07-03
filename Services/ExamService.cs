@@ -9,6 +9,7 @@ using CBTSecureDesktop.Data;
 using CBTSecureDesktop.Models;
 using System.Net.Http;
 using System.Net.Http.Json;
+using CBTSecureDesktop.Configuration;
 
 namespace CBTSecureDesktop.Services
 {
@@ -28,6 +29,13 @@ namespace CBTSecureDesktop.Services
         public bool IsMultiAnswer { get; set; } = false;
         public bool IsDoubtful { get; set; } = false;
         public List<string> Images { get; set; } = new();
+    }
+
+    internal sealed class ExamOrderState
+    {
+        public List<long> QuestionOrder { get; set; } = new();
+        public Dictionary<long, List<long>> OptionOrderBySoalId { get; set; } = new();
+        public DateTime SavedAtUtc { get; set; } = DateTime.UtcNow;
     }
 
     /// <summary>
@@ -230,6 +238,15 @@ namespace CBTSecureDesktop.Services
                 var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
                 _currentExamQuestions = await BuildDeterministicExamQuestionsAsync(soalList, ujianId, mahasiswaId);
 
+                var savedOrder = await ReadExamOrderStateAsync(ujianId, mahasiswaId);
+                if (savedOrder != null)
+                {
+                    _currentExamQuestions = ApplyExamOrderState(_currentExamQuestions, savedOrder);
+                }
+
+                // Ensure order is always persisted in encrypted local file
+                await WriteExamOrderStateAsync(ujianId, mahasiswaId, _currentExamQuestions);
+
                 // Prepare blank answers rows in deterministic display sequence
                 await _databaseService.InitializeStudentAnswersAsync(ujianId, mahasiswaId, _currentExamQuestions.Select(q => q.SoalId).ToList());
 
@@ -260,6 +277,13 @@ namespace CBTSecureDesktop.Services
                 var soalList = await _databaseService.GetExamQuestionsAsync(ujianId);
                 _currentExamQuestions = await BuildDeterministicExamQuestionsAsync(soalList, ujianId, _currentMahasiswaId);
 
+                var savedOrder = await ReadExamOrderStateAsync(ujianId, _currentMahasiswaId);
+                if (savedOrder != null)
+                {
+                    _currentExamQuestions = ApplyExamOrderState(_currentExamQuestions, savedOrder);
+                }
+
+                await WriteExamOrderStateAsync(ujianId, _currentMahasiswaId, _currentExamQuestions);
                 return _currentExamQuestions;
             }
             catch (Exception ex)
@@ -518,27 +542,49 @@ namespace CBTSecureDesktop.Services
         {
             try
             {
-                // Try to end exam session on server
-                bool ok = await _databaseService.EndExamSessionAsync(ujianId, mahasiswaId);
-                if (!ok)
+                if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
                 {
-                    // Enqueue a pending submit so background will retry
-                    var entry = new PendingAnswer
-                    {
-                        Type = PendingEntryType.SubmitExam,
-                        UjianId = ujianId,
-                        MahasiswaId = mahasiswaId
-                    };
-                    await EnqueuePendingAsync(entry);
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    return true;
                 }
 
-                await NotifyMonitoringAsync(ujianId);
+                // Try to end exam session on server
+                bool ok = await _databaseService.EndExamSessionAsync(ujianId, mahasiswaId);
+                if (ok)
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    await NotifyMonitoringAsync(ujianId);
+                    return true;
+                }
 
-                return ok;
+                if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    return true;
+                }
+
+                // Enqueue a pending submit so background will retry
+                var entry = new PendingAnswer
+                {
+                    Type = PendingEntryType.SubmitExam,
+                    UjianId = ujianId,
+                    MahasiswaId = mahasiswaId
+                };
+                await EnqueuePendingAsync(entry);
+
+                await NotifyMonitoringAsync(ujianId);
+                return false;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Submit exam error: {ex.Message}");
+
+                if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    return true;
+                }
+
                 // enqueue pending submit
                 var entry = new PendingAnswer
                 {
@@ -561,6 +607,12 @@ namespace CBTSecureDesktop.Services
                 bool ok = await _databaseService.SaveForceStopExamAsync(ujianId, mahasiswaId);
                 if (!ok)
                 {
+                    if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
+                    {
+                        await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                        return true;
+                    }
+
                     var entry = new PendingAnswer
                     {
                         Type = PendingEntryType.ForceStop,
@@ -569,11 +621,23 @@ namespace CBTSecureDesktop.Services
                     };
                     await EnqueuePendingAsync(entry);
                 }
+                else
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                }
+
                 return ok;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Submit force stopped exam error: {ex.Message}");
+
+                if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    return true;
+                }
+
                 var entry = new PendingAnswer
                 {
                     Type = PendingEntryType.ForceStop,
@@ -602,6 +666,12 @@ namespace CBTSecureDesktop.Services
                 bool ok = await _databaseService.SaveBreachTerminationAsync(ujianId, mahasiswaId, keterangan);
                 if (!ok)
                 {
+                    if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
+                    {
+                        await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                        return true;
+                    }
+
                     var entry = new PendingAnswer
                     {
                         Type = PendingEntryType.BreachTermination,
@@ -611,11 +681,23 @@ namespace CBTSecureDesktop.Services
                     };
                     await EnqueuePendingAsync(entry);
                 }
+                else
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                }
+
                 return ok;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"TerminateForBreachAsync error: {ex.Message}");
+
+                if (await IsExamAlreadyFinalizedAsync(ujianId, mahasiswaId))
+                {
+                    await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    return true;
+                }
+
                 var entry = new PendingAnswer
                 {
                     Type = PendingEntryType.BreachTermination,
@@ -716,9 +798,203 @@ namespace CBTSecureDesktop.Services
             }
         }
 
+        public Task ClearExamOrderStateAsync(long ujianId, long mahasiswaId)
+        {
+            if (ujianId <= 0 || mahasiswaId <= 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            try
+            {
+                var path = GetExamOrderStateFilePath(ujianId, mahasiswaId);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Clear order state error: {ex.Message}");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public async Task ClearLocalExamStatesAsync(long ujianId, long mahasiswaId)
+        {
+            await ClearDoubtStatesAsync(ujianId, mahasiswaId);
+            await ClearExamOrderStateAsync(ujianId, mahasiswaId);
+        }
+
         private string GetDoubtStateFilePath(long ujianId, long mahasiswaId)
         {
             return Path.Combine(_appDataDirectory, $"DoubtStates_{ujianId}_{mahasiswaId}.json");
+        }
+
+        private string GetExamOrderStateFilePath(long ujianId, long mahasiswaId)
+        {
+            return Path.Combine(_appDataDirectory, $"OrderState_{ujianId}_{mahasiswaId}.dat");
+        }
+
+        private async Task<ExamOrderState?> ReadExamOrderStateAsync(long ujianId, long mahasiswaId)
+        {
+            var path = GetExamOrderStateFilePath(ujianId, mahasiswaId);
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            try
+            {
+                var text = await File.ReadAllTextAsync(path);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return null;
+                }
+
+                if (EncryptionService.IsValidBase64(text))
+                {
+                    return EncryptionService.Decrypt<ExamOrderState>(text);
+                }
+
+                // Legacy/plain format fallback
+                return JsonSerializer.Deserialize<ExamOrderState>(text);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private async Task WriteExamOrderStateAsync(long ujianId, long mahasiswaId, List<ExamQuestion> questions)
+        {
+            var state = new ExamOrderState
+            {
+                QuestionOrder = questions.Select(q => q.SoalId).ToList(),
+                OptionOrderBySoalId = questions
+                    .GroupBy(q => q.SoalId)
+                    .ToDictionary(g => g.Key, g => g.First().OptionIds.ToList()),
+                SavedAtUtc = DateTime.UtcNow
+            };
+
+            var path = GetExamOrderStateFilePath(ujianId, mahasiswaId);
+            var tempPath = path + ".tmp";
+
+            try
+            {
+                var encrypted = EncryptionService.Encrypt(state);
+                await File.WriteAllTextAsync(tempPath, encrypted);
+                File.Move(tempPath, path, true);
+            }
+            catch
+            {
+                var json = JsonSerializer.Serialize(state);
+                await File.WriteAllTextAsync(tempPath, json);
+                File.Move(tempPath, path, true);
+            }
+        }
+
+        private static List<ExamQuestion> ApplyExamOrderState(List<ExamQuestion> source, ExamOrderState state)
+        {
+            if (source.Count == 0)
+            {
+                return source;
+            }
+
+            var ordered = new List<ExamQuestion>();
+            var map = source.ToDictionary(q => q.SoalId, q => q);
+
+            foreach (var soalId in state.QuestionOrder)
+            {
+                if (map.TryGetValue(soalId, out var question))
+                {
+                    ordered.Add(question);
+                    map.Remove(soalId);
+                }
+            }
+
+            if (map.Count > 0)
+            {
+                ordered.AddRange(map.Values.OrderBy(q => q.QuestionNumber));
+            }
+
+            foreach (var question in ordered)
+            {
+                if (!state.OptionOrderBySoalId.TryGetValue(question.SoalId, out var savedOptionOrder) || savedOptionOrder.Count == 0)
+                {
+                    continue;
+                }
+
+                ReorderQuestionOptions(question, savedOptionOrder);
+            }
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                ordered[i].QuestionNumber = i + 1;
+            }
+
+            return ordered;
+        }
+
+        private static void ReorderQuestionOptions(ExamQuestion question, List<long> savedOptionOrder)
+        {
+            var optionSnapshots = question.OptionIds
+                .Select((id, index) => new
+                {
+                    OptionId = id,
+                    OptionText = question.Options.ElementAtOrDefault(index) ?? string.Empty,
+                    OptionFile = question.OptionFiles.ElementAtOrDefault(index)
+                })
+                .ToDictionary(x => x.OptionId, x => x);
+
+            var selectedOptionIds = question.IsMultiAnswer
+                ? question.SelectedAnswers
+                    .Where(i => i >= 0 && i < question.OptionIds.Count)
+                    .Select(i => question.OptionIds[i])
+                    .Distinct()
+                    .ToList()
+                : (question.SelectedAnswer.HasValue && question.SelectedAnswer.Value >= 0 && question.SelectedAnswer.Value < question.OptionIds.Count
+                    ? new List<long> { question.OptionIds[question.SelectedAnswer.Value] }
+                    : new List<long>());
+
+            var reorderedOptionIds = new List<long>();
+            foreach (var optionId in savedOptionOrder)
+            {
+                if (optionSnapshots.ContainsKey(optionId))
+                {
+                    reorderedOptionIds.Add(optionId);
+                }
+            }
+
+            foreach (var optionId in question.OptionIds)
+            {
+                if (!reorderedOptionIds.Contains(optionId))
+                {
+                    reorderedOptionIds.Add(optionId);
+                }
+            }
+
+            question.OptionIds = reorderedOptionIds;
+            question.Options = reorderedOptionIds.Select(id => optionSnapshots[id].OptionText).ToList();
+            question.OptionFiles = reorderedOptionIds.Select(id => optionSnapshots[id].OptionFile).ToList();
+
+            question.SelectedAnswers = selectedOptionIds
+                .Select(id => question.OptionIds.IndexOf(id))
+                .Where(i => i >= 0)
+                .Distinct()
+                .ToList();
+
+            if (question.IsMultiAnswer)
+            {
+                question.SelectedAnswer = null;
+            }
+            else
+            {
+                question.SelectedAnswer = selectedOptionIds.Count > 0
+                    ? question.OptionIds.IndexOf(selectedOptionIds[0])
+                    : null;
+            }
         }
 
         private async Task<Dictionary<long, bool>> ReadDoubtStatesAsync(long ujianId, long mahasiswaId)
@@ -763,14 +1039,41 @@ namespace CBTSecureDesktop.Services
             try
             {
                 var list = await ReadPendingAsync();
-                list.Add(entry);
-                // write atomically
+
+                bool hasEquivalentTerminalEntry = list.Any(existing =>
+                    existing.UjianId == entry.UjianId &&
+                    existing.MahasiswaId == entry.MahasiswaId &&
+                    ((existing.Type == PendingEntryType.SubmitExam && entry.Type == PendingEntryType.SubmitExam) ||
+                     (existing.Type == PendingEntryType.ForceStop && entry.Type == PendingEntryType.ForceStop) ||
+                     (existing.Type == PendingEntryType.BreachTermination && entry.Type == PendingEntryType.BreachTermination)));
+
+                if (!hasEquivalentTerminalEntry)
+                {
+                    list.Add(entry);
+                }
+
+                // write atomically with encryption
                 var tmp = _pendingFilePath + ".tmp";
-                var json = System.Text.Json.JsonSerializer.Serialize(list);
-                await File.WriteAllTextAsync(tmp, json);
-                File.Move(tmp, _pendingFilePath, true);
+                try
+                {
+                    var encrypted = EncryptionService.Encrypt(list);
+                    await File.WriteAllTextAsync(tmp, encrypted);
+                    File.Move(tmp, _pendingFilePath, true);
+                }
+                catch (Exception encryptEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Encryption failed in EnqueuePendingAsync: {encryptEx.Message}");
+                    // If encryption fails, try to write as fallback (legacy format)
+                    var json = System.Text.Json.JsonSerializer.Serialize(list);
+                    await File.WriteAllTextAsync(tmp, json);
+                    File.Move(tmp, _pendingFilePath, true);
+                }
 
                 PendingCountChanged?.Invoke(list.Count);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"EnqueuePendingAsync error: {ex.Message}");
             }
             finally
             {
@@ -786,7 +1089,36 @@ namespace CBTSecureDesktop.Services
                 var txt = await File.ReadAllTextAsync(_pendingFilePath);
                 if (string.IsNullOrWhiteSpace(txt)) return new List<PendingAnswer>();
 
-                var list = System.Text.Json.JsonSerializer.Deserialize<List<PendingAnswer>>(txt) ?? new List<PendingAnswer>();
+                List<PendingAnswer> list;
+
+                // Check if file is encrypted (base64) or plain JSON (backward compatibility)
+                if (EncryptionService.IsValidBase64(txt))
+                {
+                    try
+                    {
+                        // File is encrypted, decrypt it
+                        list = EncryptionService.Decrypt<List<PendingAnswer>>(txt) ?? new List<PendingAnswer>();
+                    }
+                    catch (Exception decryptEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Decryption error (file may be corrupted): {decryptEx.Message}");
+                        return new List<PendingAnswer>();
+                    }
+                }
+                else
+                {
+                    // File is plain JSON (legacy format), try to read it
+                    // After reading, we should re-encrypt it on next write for security
+                    try
+                    {
+                        list = System.Text.Json.JsonSerializer.Deserialize<List<PendingAnswer>>(txt) ?? new List<PendingAnswer>();
+                        System.Diagnostics.Debug.WriteLine("Legacy unencrypted pending answers file detected. Will be encrypted on next write.");
+                    }
+                    catch
+                    {
+                        return new List<PendingAnswer>();
+                    }
+                }
 
                 if (ujianId.HasValue)
                 {
@@ -803,6 +1135,81 @@ namespace CBTSecureDesktop.Services
             catch
             {
                 return new List<PendingAnswer>();
+            }
+        }
+
+        private async Task<bool> IsExamAlreadyFinalizedAsync(long ujianId, long mahasiswaId)
+        {
+            try
+            {
+                var status = await _databaseService.GetStudentExamStatusAsync(ujianId, mahasiswaId);
+                return string.Equals(status, "selesai", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(status, "dihentikan", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private async Task RemovePendingEntriesForExamAsync(long ujianId, long mahasiswaId)
+        {
+            await _pendingLock.WaitAsync();
+            try
+            {
+                var list = await ReadPendingAsync();
+                var remaining = list
+                    .Where(x => x.UjianId != ujianId || x.MahasiswaId != mahasiswaId)
+                    .ToList();
+
+                if (remaining.Count == 0)
+                {
+                    try
+                    {
+                        if (File.Exists(_pendingFilePath))
+                        {
+                            File.Delete(_pendingFilePath);
+                        }
+                    }
+                    catch (Exception deleteEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Delete pending file error: {deleteEx.Message}");
+                    }
+
+                    var tempPathIfExists = _pendingFilePath + ".tmp";
+                    if (File.Exists(tempPathIfExists))
+                    {
+                        try
+                        {
+                            File.Delete(tempPathIfExists);
+                        }
+                        catch { }
+                    }
+
+                    PendingCountChanged?.Invoke(0);
+                    return;
+                }
+
+                var tmp = _pendingFilePath + ".tmp";
+                try
+                {
+                    var encrypted = EncryptionService.Encrypt(remaining);
+                    await File.WriteAllTextAsync(tmp, encrypted);
+                    File.Move(tmp, _pendingFilePath, true);
+                }
+                catch (Exception encryptEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Encryption failed in RemovePendingEntriesForExamAsync: {encryptEx.Message}");
+                    var json = System.Text.Json.JsonSerializer.Serialize(remaining);
+                    await File.WriteAllTextAsync(tmp, json);
+                    File.Move(tmp, _pendingFilePath, true);
+                }
+
+                PendingCountChanged?.Invoke(remaining.Count);
+            }
+            finally
+            {
+                _pendingLock.Release();
             }
         }
 
@@ -895,9 +1302,20 @@ namespace CBTSecureDesktop.Services
                 {
                     var remaining = list.Where(x => !succeeded.Contains(x.Id)).ToList();
                     var tmp = _pendingFilePath + ".tmp";
-                    var json = System.Text.Json.JsonSerializer.Serialize(remaining);
-                    await File.WriteAllTextAsync(tmp, json);
-                    File.Move(tmp, _pendingFilePath, true);
+                    try
+                    {
+                        var encrypted = EncryptionService.Encrypt(remaining);
+                        await File.WriteAllTextAsync(tmp, encrypted);
+                        File.Move(tmp, _pendingFilePath, true);
+                    }
+                    catch (Exception encryptEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Encryption failed in TryFlushOnceAsync: {encryptEx.Message}");
+                        // If encryption fails, try to write as fallback (legacy format)
+                        var json = System.Text.Json.JsonSerializer.Serialize(remaining);
+                        await File.WriteAllTextAsync(tmp, json);
+                        File.Move(tmp, _pendingFilePath, true);
+                    }
 
                     // notify listeners
                     PendingCountChanged?.Invoke(remaining.Count);
@@ -928,7 +1346,7 @@ namespace CBTSecureDesktop.Services
         {
             using var client = new HttpClient();
 
-            client.BaseAddress = new Uri("http://cbt.runtime.web.id"); // URL Laravel
+            client.BaseAddress = new Uri(AppConfig.GetApiBaseUrl());
 
             var response = await client.PostAsync(
                 $"/api/ujian/{ujianId}/monitoring", null);

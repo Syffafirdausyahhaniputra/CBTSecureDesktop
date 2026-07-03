@@ -376,9 +376,13 @@ namespace CBTSecureDesktop.Data
                 await connection.OpenAsync();
 
                 string query = @"
-                    SELECT DISTINCT u.ujian_id, u.matakuliah_id, u.tahun_ajaran_id, u.prodi_id,
+                    SELECT u.ujian_id, u.matakuliah_id, u.tahun_ajaran_id, u.prodi_id,
                            u.nama_ujian, u.status, u.shufflesoal,
-                           u.starttime, u.endtime, u.created_at, u.updated_at,
+                           u.starttime, u.endtime, u.created_at,
+                           GREATEST(
+                               COALESCE(u.updated_at, u.created_at, '1970-01-01 00:00:00'),
+                               COALESCE(um.updated_at, um.created_at, '1970-01-01 00:00:00')
+                           ) AS updated_at,
                            m.nama as matakuliah_nama, p.nama as prodi_nama,
                            um.status as status_mahasiswa, um.nilai as nilai_mahasiswa,
                            um.extendtime as extendtime
@@ -387,10 +391,19 @@ namespace CBTSecureDesktop.Data
                     INNER JOIN t_kelas_mahasiswa km ON uk.kelas_id = km.kelas_id
                     INNER JOIN t_matakuliah m ON u.matakuliah_id = m.matakuliah_id
                     INNER JOIN t_prodi p ON u.prodi_id = p.prodi_id
-                    LEFT JOIN t_ujian_mahasiswa um ON u.ujian_id = um.ujian_id AND um.mahasiswa_id = @mahasiswaId
+                    LEFT JOIN (
+                        SELECT um1.*
+                        FROM t_ujian_mahasiswa um1
+                        INNER JOIN (
+                            SELECT ujian_id, mahasiswa_id, MAX(ujianmahasiswa_id) AS latest_id
+                            FROM t_ujian_mahasiswa
+                            WHERE mahasiswa_id = @mahasiswaId
+                            GROUP BY ujian_id, mahasiswa_id
+                        ) latest ON latest.latest_id = um1.ujianmahasiswa_id
+                    ) um ON u.ujian_id = um.ujian_id AND um.mahasiswa_id = @mahasiswaId
                     WHERE km.mahasiswa_id = @mahasiswaId
                     AND u.status IN ('menunggu', 'dimulai', 'selesai', 'dihentikan')
-                    ORDER BY u.created_at DESC";
+                    ORDER BY updated_at DESC, u.starttime DESC";
 
                 using var command = new MySqlCommand(query, connection);
                 command.Parameters.AddWithValue("@mahasiswaId", mahasiswaId);
@@ -491,25 +504,16 @@ namespace CBTSecureDesktop.Data
                 using var connection = _dbConnection.GetConnection();
                 await connection.OpenAsync();
 
-                // Get shuffle setting
                 string shuffleQuery = "SELECT shufflesoal FROM t_ujian WHERE ujian_id = @ujianId";
                 using var shuffleCommand = new MySqlCommand(shuffleQuery, connection);
                 shuffleCommand.Parameters.AddWithValue("@ujianId", ujianId);
-                var doShuffle = Convert.ToInt32(await shuffleCommand.ExecuteScalarAsync());
+                var shuffleValue = await shuffleCommand.ExecuteScalarAsync();
+                int doShuffle = shuffleValue is null ? 0 : Convert.ToInt32(shuffleValue);
 
-                // Get questions
                 string query = @"SELECT soal_id, ujian_id, nomer_soal, pertanyaan, created_at, updated_at 
                                 FROM t_soal 
                                 WHERE ujian_id = @ujianId 
                                 ORDER BY nomer_soal";
-
-                if (doShuffle == 1)
-                {
-                    query = @"SELECT soal_id, ujian_id, nomer_soal, pertanyaan, created_at, updated_at 
-                            FROM t_soal 
-                            WHERE ujian_id = @ujianId 
-                            ORDER BY RAND()";
-                }
 
                 using var command = new MySqlCommand(query, connection);
                 command.Parameters.AddWithValue("@ujianId", ujianId);
@@ -517,7 +521,6 @@ namespace CBTSecureDesktop.Data
                 using var reader = await command.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
-                    // The nomer_soal might be stored as Int32 in DB, so we'll read it safely
                     string kodeSoalString = "";
                     if (!reader.IsDBNull("nomer_soal"))
                     {
@@ -538,11 +541,24 @@ namespace CBTSecureDesktop.Data
                 }
                 await reader.CloseAsync();
 
-                // Get answer options for each question
+                if (questions.Count == 0)
+                {
+                    return questions;
+                }
+
+                var questionIds = questions.Select(q => q.SoalId).ToList();
+                var optionsByQuestionId = await GetAnswerOptionsByQuestionIdsAsync(connection, questionIds, doShuffle == 1, ujianId);
+                var imagesByQuestionId = await GetQuestionImagesByQuestionIdsAsync(connection, questionIds);
+
                 foreach (var soal in questions)
                 {
-                    soal.OpsiJawaban = await GetAnswerOptionsAsync(connection, soal.SoalId, doShuffle);
-                    soal.GambarSoal = await GetQuestionImagesAsync(connection, soal.SoalId);
+                    soal.OpsiJawaban = optionsByQuestionId.TryGetValue(soal.SoalId, out var opsi)
+                        ? opsi
+                        : new List<OpsiJawaban>();
+
+                    soal.GambarSoal = imagesByQuestionId.TryGetValue(soal.SoalId, out var gambar)
+                        ? gambar
+                        : new List<GambarSoal>();
                 }
             }
             catch (Exception ex)
@@ -553,28 +569,31 @@ namespace CBTSecureDesktop.Data
         }
 
         /// <summary>
-        /// Gets answer options for a specific question
+        /// Gets answer options for multiple questions in a single query.
         /// </summary>
-        private async Task<List<OpsiJawaban>> GetAnswerOptionsAsync(MySqlConnection connection, long soalId, int doShuffle)
+        private async Task<Dictionary<long, List<OpsiJawaban>>> GetAnswerOptionsByQuestionIdsAsync(
+            MySqlConnection connection,
+            IReadOnlyList<long> questionIds,
+            bool doShuffle,
+            long ujianId)
         {
-            var options = new List<OpsiJawaban>();
+            var optionsByQuestionId = new Dictionary<long, List<OpsiJawaban>>();
+
+            if (questionIds.Count == 0)
+            {
+                return optionsByQuestionId;
+            }
+
             try
             {
-                string query = @"SELECT opsi_jawaban_id, soal_id, jawaban, nilai, file, created_at, updated_at 
-                                FROM t_opsi_jawaban 
-                                WHERE soal_id = @soalId 
-                                ORDER BY opsi_jawaban_id";
+                using var command = new MySqlCommand();
+                command.Connection = connection;
 
-                if (doShuffle == 1)
-                {
-                    query = @"SELECT opsi_jawaban_id, soal_id, jawaban, nilai, file, created_at, updated_at 
-                            FROM t_opsi_jawaban 
-                            WHERE soal_id = @soalId 
-                            ORDER BY RAND()";
-                }
-
-                using var command = new MySqlCommand(query, connection);
-                command.Parameters.AddWithValue("@soalId", soalId);
+                string inClause = BuildQuestionInClause(command, questionIds);
+                command.CommandText = $@"SELECT opsi_jawaban_id, soal_id, jawaban, nilai, file, created_at, updated_at
+                                         FROM t_opsi_jawaban
+                                         WHERE soal_id IN ({inClause})
+                                         ORDER BY soal_id, opsi_jawaban_id";
 
                 using var reader = await command.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
@@ -589,30 +608,63 @@ namespace CBTSecureDesktop.Data
                         CreatedAt = reader.IsDBNull("created_at") ? null : reader.GetDateTime("created_at"),
                         UpdatedAt = reader.IsDBNull("updated_at") ? null : reader.GetDateTime("updated_at")
                     };
-                    options.Add(option);
+
+                    if (!optionsByQuestionId.TryGetValue(option.SoalId, out var optionList))
+                    {
+                        optionList = new List<OpsiJawaban>();
+                        optionsByQuestionId[option.SoalId] = optionList;
+                    }
+
+                    optionList.Add(option);
+                }
+
+                if (doShuffle)
+                {
+                    foreach (var kvp in optionsByQuestionId)
+                    {
+                        int seed = unchecked((int)((ujianId * 397) ^ kvp.Key));
+                        var random = new Random(seed);
+                        var list = kvp.Value;
+
+                        for (int i = list.Count - 1; i > 0; i--)
+                        {
+                            int j = random.Next(i + 1);
+                            (list[i], list[j]) = (list[j], list[i]);
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Get options error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Get options batch error: {ex.Message}");
             }
-            return options;
+
+            return optionsByQuestionId;
         }
 
         /// <summary>
-        /// Gets images for a specific question
+        /// Gets question images for multiple questions in a single query.
         /// </summary>
-        private async Task<List<GambarSoal>> GetQuestionImagesAsync(MySqlConnection connection, long soalId)
+        private async Task<Dictionary<long, List<GambarSoal>>> GetQuestionImagesByQuestionIdsAsync(
+            MySqlConnection connection,
+            IReadOnlyList<long> questionIds)
         {
-            var images = new List<GambarSoal>();
+            var imagesByQuestionId = new Dictionary<long, List<GambarSoal>>();
+
+            if (questionIds.Count == 0)
+            {
+                return imagesByQuestionId;
+            }
+
             try
             {
-                string query = @"SELECT gambar_soal_id, soal_id, file, created_at, updated_at 
-                                FROM t_gambar_soal 
-                                WHERE soal_id = @soalId";
+                using var command = new MySqlCommand();
+                command.Connection = connection;
 
-                using var command = new MySqlCommand(query, connection);
-                command.Parameters.AddWithValue("@soalId", soalId);
+                string inClause = BuildQuestionInClause(command, questionIds);
+                command.CommandText = $@"SELECT gambar_soal_id, soal_id, file, created_at, updated_at
+                                         FROM t_gambar_soal
+                                         WHERE soal_id IN ({inClause})";
 
                 using var reader = await command.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
@@ -625,14 +677,35 @@ namespace CBTSecureDesktop.Data
                         CreatedAt = reader.IsDBNull("created_at") ? null : reader.GetDateTime("created_at"),
                         UpdatedAt = reader.IsDBNull("updated_at") ? null : reader.GetDateTime("updated_at")
                     };
-                    images.Add(image);
+
+                    if (!imagesByQuestionId.TryGetValue(image.SoalId, out var imageList))
+                    {
+                        imageList = new List<GambarSoal>();
+                        imagesByQuestionId[image.SoalId] = imageList;
+                    }
+
+                    imageList.Add(image);
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Get images error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Get images batch error: {ex.Message}");
             }
-            return images;
+
+            return imagesByQuestionId;
+        }
+
+        private static string BuildQuestionInClause(MySqlCommand command, IReadOnlyList<long> questionIds)
+        {
+            var parameterNames = new List<string>(questionIds.Count);
+            for (int i = 0; i < questionIds.Count; i++)
+            {
+                string parameterName = $"@soalId{i}";
+                parameterNames.Add(parameterName);
+                command.Parameters.AddWithValue(parameterName, questionIds[i]);
+            }
+
+            return string.Join(",", parameterNames);
         }
 
         #endregion

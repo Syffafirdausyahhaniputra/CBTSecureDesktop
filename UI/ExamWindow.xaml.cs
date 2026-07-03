@@ -49,6 +49,10 @@ namespace CBTSecureDesktop.UI
         // Network status tracking
         private bool _isOnline = true;
 
+        // Exam lifecycle flags
+        private bool _isExamEnding = false;
+        private bool _allowCloseWithoutConfirmation = false;
+
         public ExamWindow(AuthService authService, ExamService examService, long ujianId, long mahasiswaId)
         {
             InitializeComponent();
@@ -175,6 +179,10 @@ namespace CBTSecureDesktop.UI
                 // ACTIVATE SECURITY MODE
                 ActivateSecurityMode();
 
+                // START PROCESS MONITORING (kill blacklist apps during exam)
+                // This now runs ONLY during exam, not during login
+                StartProcessMonitoring();
+
                 // Display first question
                 DisplayQuestion(0);
 
@@ -266,6 +274,152 @@ namespace CBTSecureDesktop.UI
             }
         }
 
+        private async Task DeleteCachedImagesAfterExamAsync(string context)
+        {
+            try
+            {
+                try
+                {
+                    QuestionImage.Source = null;
+                }
+                catch { }
+
+                var imageIds = _questions
+                    .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Distinct()
+                    .ToList();
+
+                var optionIds = _questions
+                    .SelectMany(q => q.OptionIds ?? Enumerable.Empty<long>())
+                    .Where(id => id > 0)
+                    .Distinct()
+                    .ToList();
+
+                var deleteTasks = new List<Task>();
+
+                if (imageIds.Count > 0)
+                {
+                    deleteTasks.Add(_imageService.DeleteCacheFilesAsync(imageIds));
+                }
+
+                if (optionIds.Count > 0)
+                {
+                    deleteTasks.Add(_imageService.DeleteOptionCacheFilesAsync(optionIds));
+                }
+
+                if (deleteTasks.Count > 0)
+                {
+                    await Task.WhenAll(deleteTasks);
+
+                    await Task.Delay(120);
+
+                    // Second pass to ensure transient lock cases are cleaned up.
+                    await Task.WhenAll(
+                        _imageService.DeleteCacheFilesAsync(imageIds),
+                        _imageService.DeleteOptionCacheFilesAsync(optionIds));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after {context}: {ex.Message}");
+            }
+        }
+
+        private async Task<bool> EnsureOnlineForTimeoutSubmissionAsync()
+        {
+            while (true)
+            {
+                bool online;
+                try
+                {
+                    online = await _examService.TestConnectionAsync();
+                }
+                catch
+                {
+                    online = false;
+                }
+
+                _isOnline = online;
+
+                if (online)
+                {
+                    await Dispatcher.InvokeAsync(() => UpdateOfflineUIStatus(true));
+                    return true;
+                }
+
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    UpdateOfflineUIStatus(false);
+                    MessageBox.Show(
+                        "Waktu ujian sudah habis, tetapi perangkat Anda sedang offline.\n\n" +
+                        "Ujian tidak dapat diselesaikan sebelum tersambung ke internet.\n" +
+                        "Silakan sambungkan Wi-Fi sekarang.",
+                        "Koneksi Internet Diperlukan",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+
+                    WifiButton_Click(this, new RoutedEventArgs());
+                });
+
+                await Task.Delay(1000);
+            }
+        }
+
+        private async Task AutoSubmitWhenTimeExpiredAsync()
+        {
+            if (_isExamEnding)
+            {
+                return;
+            }
+
+            _isExamEnding = true;
+            _timer.Stop();
+            this.IsEnabled = false;
+            SubmitButton.IsEnabled = false;
+            PreviousButton.IsEnabled = false;
+            NextButton.IsEnabled = false;
+
+            bool isConnected = await EnsureOnlineForTimeoutSubmissionAsync();
+            if (!isConnected)
+            {
+                return;
+            }
+
+            try
+            {
+                bool success = await _examService.SubmitExamAsync(_ujianId, _mahasiswaId);
+                await _examService.ClearLocalExamStatesAsync(_ujianId, _mahasiswaId);
+
+                string message = success
+                    ? "Waktu ujian telah habis. Ujian otomatis diselesaikan dan jawaban berhasil dikirim."
+                    : "Waktu ujian telah habis. Ujian ditutup otomatis, namun pengiriman jawaban ke server gagal saat ini.";
+
+                MessageBox.Show(
+                    message,
+                    "Ujian Selesai",
+                    MessageBoxButton.OK,
+                    success ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Auto submit timeout error: {ex.Message}");
+                MessageBox.Show(
+                    "Waktu ujian telah habis. Ujian ditutup otomatis.",
+                    "Ujian Selesai",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+
+            await DeleteCachedImagesAfterExamAsync("timeout");
+            DeactivateSecurityMode();
+            _allowCloseWithoutConfirmation = true;
+
+            var dashboard = new DashboardWindow(_authService);
+            dashboard.Show();
+            this.Close();
+        }
+
         private void UpdateClockAndRemainingTime()
         {
             try
@@ -297,6 +451,7 @@ namespace CBTSecureDesktop.UI
                             if (remaining <= TimeSpan.Zero)
                             {
                                 TimerText.Text = "00:00:00";
+                                _ = AutoSubmitWhenTimeExpiredAsync();
                             }
                             else
                             {
@@ -1414,6 +1569,7 @@ namespace CBTSecureDesktop.UI
             // Disable button immediately to prevent double-clicks/freezing
             var submitBtn = sender as Button;
             if (submitBtn == null) return;
+            if (_isExamEnding) return;
 
             submitBtn.IsEnabled = false;
 
@@ -1468,6 +1624,8 @@ namespace CBTSecureDesktop.UI
                     return;
                 }
 
+                _isExamEnding = true;
+
                 // Stop timer
                 _timer.Stop();
 
@@ -1482,7 +1640,7 @@ namespace CBTSecureDesktop.UI
 
                     if (success)
                     {
-                        await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
+                        await _examService.ClearLocalExamStatesAsync(_ujianId, _mahasiswaId);
 
                         // Keep the feedback minimal: only show that exam is finished
                         string message = "Ujian berhasil dikirim!\n\nStatus: Selesai." +
@@ -1491,28 +1649,11 @@ namespace CBTSecureDesktop.UI
                         MessageBox.Show(message, "Pengiriman Selesai",
                             MessageBoxButton.OK, MessageBoxImage.Information);
 
-                        // Delete any downloaded cached images related to this exam
-                        try
-                        {
-                            var imageIds = _questions
-                                .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
-                                .Where(id => !string.IsNullOrWhiteSpace(id))
-                                .Distinct()
-                                .ToList();
-
-                            if (imageIds.Count > 0)
-                            {
-                                // Fire-and-forget deletion to speed up returning to dashboard.
-                                _ = _imageService.DeleteCacheFilesAsync(imageIds);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after submit: {ex.Message}");
-                        }
+                        await DeleteCachedImagesAfterExamAsync("submit");
 
                         // Deactivate security and navigate to dashboard
                         DeactivateSecurityMode();
+                        _allowCloseWithoutConfirmation = true;
                         var dashboard = new DashboardWindow(_authService);
                         dashboard.Show();
                         this.Close();
@@ -1523,6 +1664,7 @@ namespace CBTSecureDesktop.UI
                             "Kesalahan Pengiriman", MessageBoxButton.OK, MessageBoxImage.Error);
 
                         // Re-enable buttons
+                        _isExamEnding = false;
                         submitBtn.IsEnabled = true;
                         PreviousButton.IsEnabled = true;
                         NextButton.IsEnabled = true;
@@ -1534,6 +1676,7 @@ namespace CBTSecureDesktop.UI
                     MessageBox.Show($"Kesalahan mengirim ujian: {ex.Message}",
                         "Kesalahan", MessageBoxButton.OK, MessageBoxImage.Error);
 
+                    _isExamEnding = false;
                     submitBtn.IsEnabled = true;
                     PreviousButton.IsEnabled = true;
                     NextButton.IsEnabled = true;
@@ -1549,6 +1692,11 @@ namespace CBTSecureDesktop.UI
 
         private async void Timer_Tick(object? sender, EventArgs e)
         {
+            if (_isExamEnding)
+            {
+                return;
+            }
+
             _elapsedSeconds++;
             UpdateClockAndRemainingTime();
 
@@ -1558,39 +1706,23 @@ namespace CBTSecureDesktop.UI
                 string? status = await _examService.GetExamStatusAsync(_ujianId, _mahasiswaId);
                 if (status == "dihentikan")
                 {
+                    _isExamEnding = true;
                     _timer.Stop();
                     SubmitButton.IsEnabled = false;
                     this.IsEnabled = false; // block user interaction immediately
 
                     // Secara siluman kumpulkan poinnya ke database dengan status dihentikan
                     await _examService.CalculateAndSaveForceStopScoreAsync(_ujianId, _mahasiswaId);
-                    await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
+                    await _examService.ClearLocalExamStatesAsync(_ujianId, _mahasiswaId);
 
                     MessageBox.Show("Ujian Anda telah dihentikan secara paksa oleh Admin/Pengawas.\n\n" +
                                     "Segala jawaban yang telah terisi telah dikumpulkan dan diakumulasikan.",
                         "Ujian Dihentikan", MessageBoxButton.OK, MessageBoxImage.Warning);
 
-                    // Delete any downloaded cached images related to this exam
-                    try
-                    {
-                        var imageIds = _questions
-                            .SelectMany(q => q.Images ?? Enumerable.Empty<string>())
-                            .Where(id => !string.IsNullOrWhiteSpace(id))
-                            .Distinct()
-                            .ToList();
-
-                        if (imageIds.Count > 0)
-                        {
-                            // Fire-and-forget deletion to speed up returning to dashboard.
-                            _ = _imageService.DeleteCacheFilesAsync(imageIds);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Failed to delete cached images after forced stop: {ex.Message}");
-                    }
+                    await DeleteCachedImagesAfterExamAsync("forced stop");
 
                     DeactivateSecurityMode();
+                    _allowCloseWithoutConfirmation = true;
                     var dashboard = new DashboardWindow(_authService);
                     dashboard.Show();
 
@@ -1937,12 +2069,13 @@ namespace CBTSecureDesktop.UI
         /// </summary>
         private async void OnSecurityBreachDetected()
         {
+            _isExamEnding = true;
             _timer.Stop();
 
             // Silently record the forced termination in t_ujian_mahasiswa
             // (status='dihentikan', endtime, nilai, keterangan) before notifying the student
             await _examService.TerminateForBreachAsync(_ujianId, _mahasiswaId);
-            await _examService.ClearDoubtStatesAsync(_ujianId, _mahasiswaId);
+            await _examService.ClearLocalExamStatesAsync(_ujianId, _mahasiswaId);
 
             MessageBox.Show(
                 "⚠️ PELANGGARAN KEAMANAN TERDETEKSI!\n\n" +
@@ -1953,7 +2086,9 @@ namespace CBTSecureDesktop.UI
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
 
+            await DeleteCachedImagesAfterExamAsync("security breach");
             DeactivateSecurityMode();
+            _allowCloseWithoutConfirmation = true;
             await _authService.LogoutAsync();
 
             var loginWindow = new LoginWindow();
@@ -1963,6 +2098,16 @@ namespace CBTSecureDesktop.UI
 
         private void ExamWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
+            // Stop process monitoring ketika exam berakhir (BEFORE security deactivation)
+            StopProcessMonitoring();
+
+            if (_allowCloseWithoutConfirmation)
+            {
+                _timer.Stop();
+                DeactivateSecurityMode();
+                return;
+            }
+
             // Prevent accidental closing during exam
             if (_kioskManager.IsKioskModeActive)
             {
@@ -2155,6 +2300,43 @@ namespace CBTSecureDesktop.UI
             if (syncWindow.IsLoaded)
             {
                 syncWindow.Close();
+            }
+        }
+
+        /// <summary>
+        /// Start process monitoring untuk kill blacklist apps during exam.
+        /// Hanya berjalan saat exam berlangsung.
+        /// </summary>
+        private void StartProcessMonitoring()
+        {
+            try
+            {
+                _processMonitor.StartMonitoring(onViolationDetected: (msg) =>
+                {
+                    Debug.WriteLine($"EXAM SECURITY: Blocked forbidden apps: {msg}");
+                    // Optionally dapat tambah UI notification di sini
+                });
+                Debug.WriteLine("ExamWindow: Process monitoring STARTED - Security active");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error starting process monitoring: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Stop process monitoring ketika exam berakhir.
+        /// </summary>
+        private void StopProcessMonitoring()
+        {
+            try
+            {
+                _processMonitor.StopMonitoring();
+                Debug.WriteLine("ExamWindow: Process monitoring STOPPED - Exam ended");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error stopping process monitoring: {ex.Message}");
             }
         }
     }
