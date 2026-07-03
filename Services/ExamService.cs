@@ -928,7 +928,7 @@ namespace CBTSecureDesktop.Services
         {
             using var client = new HttpClient();
 
-            client.BaseAddress = new Uri("http://localhost:8000"); // URL Laravel
+            client.BaseAddress = new Uri("http://cbt.runtime.web.id"); // URL Laravel
 
             var response = await client.PostAsync(
                 $"/api/ujian/{ujianId}/monitoring", null);
