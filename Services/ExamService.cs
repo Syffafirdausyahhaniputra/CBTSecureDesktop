@@ -624,6 +624,8 @@ namespace CBTSecureDesktop.Services
                 else
                 {
                     await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    try { await NotifyMonitoringAsync(ujianId); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Notify monitoring error (ForceStop): {ex.Message}"); }
                 }
 
                 return ok;
@@ -684,6 +686,8 @@ namespace CBTSecureDesktop.Services
                 else
                 {
                     await RemovePendingEntriesForExamAsync(ujianId, mahasiswaId);
+                    try { await NotifyMonitoringAsync(ujianId); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Notify monitoring error (Breach): {ex.Message}"); }
                 }
 
                 return ok;
@@ -1281,6 +1285,15 @@ namespace CBTSecureDesktop.Services
                     {
                         System.Diagnostics.Debug.WriteLine($"Flush entry failed: {ex.Message}");
                         ok = false;
+                    }
+
+                    // Notify monitoring for terminal entries that were successfully flushed
+                    if (ok && (entry.Type == PendingEntryType.SubmitExam ||
+                               entry.Type == PendingEntryType.ForceStop ||
+                               entry.Type == PendingEntryType.BreachTermination))
+                    {
+                        try { await NotifyMonitoringAsync(entry.UjianId); }
+                        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Notify monitoring error (flush): {ex.Message}"); }
                     }
 
                     if (ok)
