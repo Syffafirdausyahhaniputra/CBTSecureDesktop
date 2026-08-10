@@ -102,7 +102,12 @@ namespace CBTSecureDesktop.Models
                 if (statusGlobal == "selesai" || now > ActualEndTime || statusMahasiswa == "selesai" || statusMahasiswa == "dihentikan")
                     return System.Windows.Visibility.Collapsed;
 
-                return System.Windows.Visibility.Visible;
+                // Show preparation button only if exam starts within 3 hours
+                var timeUntilExam = StartTime - now;
+                if (timeUntilExam.TotalHours < 3 && now < StartTime)
+                    return System.Windows.Visibility.Visible;
+
+                return System.Windows.Visibility.Collapsed;
             }
         }
 
